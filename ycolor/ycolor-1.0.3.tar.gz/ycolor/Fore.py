@@ -1,0 +1,16 @@
+BLACK = 0x00 # black
+DARK_BLUE = 0x01 # dark blue
+DARK_GREEN = 0x02 # dark green
+DARK_SKYBLUE = 0x03 # dark skyblue
+DARK_RED = 0x04 # dark red
+DARK_PINK = 0x05 # dark pink
+DARK_YELLOW = 0x06 # dark yellow
+DARK_WHITE = 0x07 # dark white
+DARK_GRAY = 0x08 # dark gray
+BLUE = 0x09 # blue
+GREEN = 0x0a # green
+SKYBLUE = 0x0b # skyblue
+RED = 0x0c # red
+PINK = 0x0d # pink
+YELLOW = 0x0e # yellow
+WHITE = 0x0f # white
