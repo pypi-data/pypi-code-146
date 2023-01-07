@@ -1,0 +1,340 @@
+import asyncio
+import json
+from copy import deepcopy
+from time import time
+from typing import Dict, List, Literal, Union
+
+from httpx import AsyncClient, HTTPError
+
+from nonebot import require
+from nonebot.log import logger
+
+require("nonebot_plugin_htmlrender")
+from nonebot_plugin_htmlrender import template_to_pic
+
+from .__utils__ import LOCAL_DIR, SCALE_FACTOR, TPL_VERSION, download
+from .data_convert import (
+    simplDamageRes,
+    simplFightProp,
+    simplTeamDamageRes,
+    transFromEnka,
+    transToTeyvat,
+)
+
+
+async def queryPanelApi(uid: str, source: Literal["enka", "mgg"] = "enka") -> Dict:
+    """
+    原神游戏内角色展柜数据请求
+
+    * ``param uid: str`` 查询用户 UID
+    * ``param source: Literal["enka", "mgg"] = "enka"`` 查询接口
+    - ``return: Dict`` 查询结果，出错时返回 ``{"error": "错误信息"}``
+    """
+    enkaMirrors = [
+        "https://enka.network",
+        "https://enka.minigg.cn",
+        "https://enka.microgg.cn",
+    ]
+    async with AsyncClient() as client:
+        resJson = {}
+        for idx, root in enumerate(enkaMirrors):
+            try:
+                res = await client.get(
+                    url=f"{root}/u/{uid}/__data.json",
+                    headers={
+                        "Accept": "application/json",
+                        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7",
+                        "Cache-Control": "no-cache",
+                        "Cookie": "locale=zh-CN",
+                        "Referer": "https://enka.network/",
+                        "User-Agent": (
+                            "Mozilla/5.0 (Linux; Android 12; Nexus 5) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/102.0.0.0 Mobile Safari/537.36"
+                        ),
+                    },
+                    timeout=20.0,
+                )
+                resJson = res.json()
+                break
+            except (HTTPError, json.decoder.JSONDecodeError) as e:
+                if idx == len(enkaMirrors) - 1:
+                    logger.opt(exception=e).error("面板数据接口无法访问或返回错误")
+                    return {"error": f"[{e.__class__.__name__}] 暂时无法访问面板数据接口.."}
+                else:
+                    logger.info(f"从 {root} 获取面板失败，正在自动切换镜像重试...")
+    if not resJson.get("playerInfo"):
+        return {"error": f"UID{uid} 返回信息不全，接口可能正在维护.."}
+    if not resJson.get("avatarInfoList"):
+        return {"error": f"UID{uid} 的角色展柜详细数据已隐藏！"}
+    if not resJson["playerInfo"].get("showAvatarInfoList"):
+        return {"error": f"UID{uid} 的角色展柜内还没有角色哦！"}
+    return resJson
+
+
+async def queryDamageApi(body: Dict, mode: Literal["single", "team"] = "single") -> Dict:
+    """
+    角色伤害计算数据请求（提瓦特小助手）
+
+    * ``param body: Dict`` 查询角色数据
+    * ``param mode: Literal["single", "team"] = "single"`` 查询接口类型，默认请求角色伤害接口，传入 ``"team"`` 请求队伍伤害接口
+    - ``return: Dict`` 查询结果，出错时返回 ``{}``
+    """
+    apiMap = {
+        "single": "https://api.lelaer.com/ys/getDamageResult.php",
+        "team": "https://api.lelaer.com/ys/getTeamResult.php",
+    }
+    async with AsyncClient() as client:
+        try:
+            res = await client.post(
+                apiMap[mode],
+                json=body,
+                headers={
+                    "referer": "https://servicewechat.com/wx2ac9dce11213c3a8/192/page-frame.html",
+                    "user-agent": (
+                        "Mozilla/5.0 (Linux; Android 12; SM-G977N Build/SP1A.210812.016; wv) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/86.0.4240.99 "
+                        "XWEB/4375 MMWEBSDK/20221011 Mobile Safari/537.36 MMWEBID/4357 "
+                        "MicroMessenger/8.0.30.2244(0x28001E44) WeChat/arm64 Weixin GPVersion/1 "
+                        "NetType/WIFI Language/zh_CN ABI/arm64 MiniProgramEnv/android"
+                    ),
+                },
+            )
+            return res.json()
+        except (HTTPError, json.decoder.JSONDecodeError) as e:
+            logger.opt(exception=e).error("提瓦特小助手接口无法访问或返回错误")
+            return {}
+        except Exception as e:
+            logger.opt(exception=e).error("提瓦特小助手接口错误")
+            return {}
+
+
+async def getAvatarData(uid: str, char: str = "全部") -> Dict:
+    """
+    角色数据获取（内部格式）
+
+    * ``param uid: str`` 查询用户 UID
+    * ``param char: str = "全部"`` 查询角色名
+    - ``return: Dict`` 查询结果。出错时返回 ``{"error": "错误信息"}``
+    """
+    # 总是先读取一遍缓存
+    cache = LOCAL_DIR / "cache" / f"{uid}.json"
+    if cache.exists():
+        cacheData = json.loads(cache.read_text(encoding="utf-8"))
+        nextQueryTime = cacheData["next"]
+    else:
+        cacheData, nextQueryTime = {}, 0
+
+    if int(time()) <= nextQueryTime:
+        logger.info("UID{} 的角色展柜数据刷新冷却还有 {} 秒！".format(uid, nextQueryTime - int(time())))
+    else:
+        logger.info(f"UID{uid} 的角色展柜数据正在刷新！")
+        newData = await queryPanelApi(uid)
+        if not cacheData and newData.get("error"):
+            return newData
+        elif not newData.get("error"):
+            avatarsCache = {str(x["id"]): x for x in cacheData.get("avatars", [])}
+            now, wait4Dmg, avatars, avatarIdsNew = int(time()), {}, [], []
+            for newAvatar in newData["avatarInfoList"]:
+                if newAvatar["avatarId"] in [10000005, 10000007]:
+                    logger.info("旅行者面板查询暂未支持！")
+                    continue
+                tmp, gotDmg = await transFromEnka(newAvatar, now), False
+
+                if str(tmp["id"]) in avatarsCache:
+                    # 保留旧的伤害计算数据
+                    avatarsCache[str(tmp["id"])].pop("time")
+                    cacheDmg = avatarsCache[str(tmp["id"])].pop("damage")
+                    nowStat = {
+                        k: v for k, v in tmp.items() if k not in ["damage", "time"]
+                    }
+                    if cacheDmg and avatarsCache[str(tmp["id"])] == nowStat:
+                        logger.info(f"UID{uid} 的 {tmp['name']} 伤害计算结果无需刷新！")
+                        tmp["damage"], gotDmg = cacheDmg, True
+                    else:
+                        logger.info(
+                            "UID{} 的 {} 数据发生变化：\n{}\n{}".format(
+                                uid, tmp["name"], avatarsCache[str(tmp["id"])], nowStat
+                            )
+                        )
+                avatarIdsNew.append(tmp["id"])
+                avatars.append(tmp)
+                if not gotDmg:
+                    wait4Dmg[str(len(avatars) - 1)] = tmp
+
+            if wait4Dmg:
+                logger.info(
+                    "正在为 UID{} 的 {} 重新请求伤害计算接口".format(
+                        uid, "/".join(f"[{aI}]{a['name']}" for aI, a in wait4Dmg.items())
+                    )
+                )
+                # 深拷贝避免转换对上下文中的 avatars 产生影响
+                wtf = deepcopy([a for _, a in wait4Dmg.items()])
+                teyvatBody = await transToTeyvat(wtf, uid)
+                teyvatRaw = await queryDamageApi(teyvatBody)
+                if teyvatRaw.get("code", "x") != 200 or len(wait4Dmg) != len(
+                    teyvatRaw.get("result", [])
+                ):
+                    logger.error(
+                        (
+                            f"UID{uid} 的 {len(wait4Dmg)} 位角色伤害计算请求失败！"
+                            f"\n>>>> [提瓦特返回] {teyvatRaw}"
+                        )
+                    )
+                else:
+                    for dmgIdx, dmgData in enumerate(teyvatRaw.get("result", [])):
+                        aIdx = int(list(wait4Dmg.keys())[dmgIdx])
+                        avatars[aIdx]["damage"] = await simplDamageRes(dmgData)
+
+            cacheData["avatars"] = [
+                *avatars,
+                *[
+                    aData
+                    for _, aData in avatarsCache.items()
+                    if aData["id"] not in avatarIdsNew
+                ],
+            ]
+            cacheData["next"] = now + newData["ttl"]
+            cache.write_text(
+                json.dumps(cacheData, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
+    # 获取所需角色数据
+    if char == "全部":
+        return cacheData
+    searchRes = [x for x in cacheData["avatars"] if x["name"] == char]
+    return (
+        {
+            "error": "UID{} 游戏内展柜中的 {} 位角色中没有 {}！".format(
+                uid, len(cacheData["avatars"]), char
+            )
+        }
+        if not searchRes
+        else searchRes[0]
+    )
+
+
+async def getPanel(uid: str, char: str = "全部") -> Union[bytes, str]:
+    """
+    原神游戏内角色展柜消息生成入口
+
+    * ``param uid: str`` 查询用户 UID
+    * ``param char: str = "全部"`` 查询角色
+    - ``return: Union[bytes, str]`` 查询结果。一般返回图片字节，出错时返回错误信息字符串
+    """
+    # 获取面板数据
+    data = await getAvatarData(uid, char)
+    if data.get("error"):
+        return data["error"]
+    if char == "全部":
+        return "成功获取了 UID{} 的{}等 {} 位角色数据！".format(
+            uid, "、".join(a["name"] for a in data["avatars"]), len(data["avatars"])
+        )
+
+    # 图标下载任务
+    dlTasks = [
+        download(data["icon"], local=char),
+        download(data["gachaAvatarImg"], local=char),
+        *[download(sData["icon"], local=char) for _, sData in data["skills"].items()],
+        *[download(conData["icon"], local=char) for conData in data["consts"]],
+        download(data["weapon"]["icon"], local="weapon"),
+        *[download(relicData["icon"], local="artifacts") for relicData in data["relics"]],
+    ]
+    await asyncio.gather(*dlTasks)
+    dlTasks.clear()
+
+    # 渲染截图
+    data["fightProp"] = await simplFightProp(
+        data["fightProp"], data["baseProp"], char, data["element"]
+    )
+    htmlBase = str(LOCAL_DIR.resolve())
+    return await template_to_pic(
+        template_path=htmlBase,
+        template_name=f"panel-{TPL_VERSION}.html",
+        templates={"css": TPL_VERSION, "uid": uid, "data": data},
+        pages={
+            "device_scale_factor": SCALE_FACTOR,
+            "viewport": {"width": 600, "height": 300},
+            "base_url": f"file://{htmlBase}",
+        },
+        wait=2,
+    )
+
+
+async def getTeam(uid: str, chars: List[str] = []) -> Union[bytes, str]:
+    """
+    队伍伤害消息生成入口
+
+    * ``param uid: str`` 查询用户 UID
+    * ``param chars: List[str] = []`` 查询角色，为空默认数据中前四个
+    - ``return: Union[bytes, str]`` 查询结果。一般返回图片字节，出错时返回错误信息字符串
+    """
+    # 获取面板数据
+    data = await getAvatarData(uid, "全部")
+    if data.get("error"):
+        return data["error"]
+
+    if chars:
+        extract = [a for a in data["avatars"] if a["name"] in chars]
+        if len(extract) != len(chars):
+            gotThis = [a["name"] for a in extract]
+            return "UID{} 的最新数据中未发现{}！".format(
+                uid, "、".join(c for c in chars if c not in gotThis)
+            )
+    elif len(data["avatars"]) >= 4:
+        extract = data["avatars"][:4]
+        logger.info(
+            "UID{} 未指定队伍，自动选择面板中前 4 位进行计算：{} ...".format(
+                uid, "、".join(a["name"] for a in extract)
+            )
+        )
+    else:
+        return f"UID{uid} 的面板数据甚至不足以组成一支队伍呢！"
+
+    # 图片下载任务
+    for tmp in extract:
+        dlTasks = [
+            download(tmp["icon"], local=tmp["name"]),
+            *[
+                download(sData["icon"], local=tmp["name"])
+                for _, sData in tmp["skills"].items()
+            ],
+            download(tmp["weapon"]["icon"], local="weapon"),
+            *[
+                download(
+                    f"UI_RelicIcon_{relicData['icon'].split('_')[-2]}_4",
+                    local="artifacts",
+                )
+                for relicData in tmp["relics"]
+            ],
+        ]
+        await asyncio.gather(*dlTasks)
+        dlTasks.clear()
+
+    teyvatBody = await transToTeyvat(deepcopy(extract), uid)
+    teyvatRaw = await queryDamageApi(teyvatBody, "team")
+    if teyvatRaw.get("code", "x") != 200 or not teyvatRaw.get("result"):
+        logger.error(
+            (f"UID{uid} 的 {len(extract)} 位角色队伍伤害计算请求失败！" f"\n>>>> [提瓦特返回] {teyvatRaw}")
+        )
+        return f"UID{uid} 队伍伤害计算失败，接口可能发生变动！" if teyvatRaw else "队伍伤害计算小程序状态异常！"
+    try:
+        data = await simplTeamDamageRes(
+            teyvatRaw["result"], {a["name"]: a for a in extract}
+        )
+    except Exception as e:
+        logger.opt(exception=e).error("队伍伤害数据解析出错")
+        return f"[{e.__class__.__name__}] 队伍伤害数据解析出错咯"
+
+    htmlBase = str(LOCAL_DIR.resolve())
+    return await template_to_pic(
+        template_path=htmlBase,
+        template_name=f"team-{TPL_VERSION}.html",
+        templates={"css": TPL_VERSION, "data": data},
+        pages={
+            "device_scale_factor": SCALE_FACTOR,
+            "viewport": {"width": 600, "height": 300},
+            "base_url": f"file://{htmlBase}",
+        },
+        wait=2,
+    )
