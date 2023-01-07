@@ -1,0 +1,40 @@
+#########################################
+# Paths
+#########################################
+
+# import constants as CONSTANTS
+# a string literal representing an forward slash
+FORWARD_SLASH = "/"
+DOT = "."
+
+DRIVERS_DIR = "drivers"
+DRIVERS_DIR_WITH_SLASH = DRIVERS_DIR + FORWARD_SLASH
+
+TESTS_DIR = "tests"
+TESTS_DIR_WITH_SLASH = TESTS_DIR + FORWARD_SLASH
+
+TEST_DATA_DIR = "test_data"
+TEST_DATA_DIR_WITH_SLASH = TEST_DATA_DIR + FORWARD_SLASH
+
+# test_output directory path
+TEST_OUTPUT_DIR = "test_output"
+TEST_OUTPUT_DIR_WITH_SLASH = TEST_OUTPUT_DIR + FORWARD_SLASH
+
+# screenshots directory path
+TEST_SCREENSHOT_DIR = "screenshots"
+TEST_OUTPUT_SCREENSHOT_DIR = TEST_OUTPUT_DIR_WITH_SLASH + TEST_SCREENSHOT_DIR
+TEST_OUTPUT_SCREENSHOT_DIR_WITH_SLASH = TEST_OUTPUT_DIR_WITH_SLASH + TEST_SCREENSHOT_DIR + FORWARD_SLASH
+TEST_OUTPUT_SCREENSHOT_RELATIVE_DIR = TEST_SCREENSHOT_DIR
+
+
+# tests_api-backup directory path
+TEST_API_DIRECTORY = "tests_api"
+TEST_API_DIRECTORY_WITH_SLASH = TEST_API_DIRECTORY + FORWARD_SLASH
+
+# tests_performance_backup directory path
+TEST_PERFORMANCE_DIRECTORY = "tests_performance"
+TEST_PERFORMANCE_DIRECTORY_WITH_SLASH = TEST_PERFORMANCE_DIRECTORY + FORWARD_SLASH
+
+# Allure-Reports
+TEST_ALLURE_GENERATE_DIR = "allure-report"
+TEST_ALLURE_REPORTS_DIR = "tests_advanced_reports"
