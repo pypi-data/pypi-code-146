@@ -1,0 +1,1 @@
+from colorise_terminal.colorise_terminal import cprint
