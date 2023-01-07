@@ -1,0 +1,11 @@
+from typing import Callable, Union
+from KeyboardMemory import KeyboardMemory
+from LatexConfiguration import LatexConfiguration
+from PartOfNumberWithDigits import PartOfNumberWithDigits
+
+class DecimalSeparatorNode(PartOfNumberWithDigits):
+  def __init__(self, latex: Union[str, Callable[[], str]] = '.') -> None:
+    self.latex : Callable[[], str] = (lambda: latex) if isinstance(latex, str) else latex
+
+  def getLatexPart(self, k: KeyboardMemory, latexConfiguration: LatexConfiguration) -> str:
+    return self.latex()
