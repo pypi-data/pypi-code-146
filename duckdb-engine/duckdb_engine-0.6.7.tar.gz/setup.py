@@ -1,0 +1,34 @@
+# -*- coding: utf-8 -*-
+from setuptools import setup
+
+packages = \
+['duckdb_engine', 'duckdb_engine.tests', 'duckdb_engine.tests.snapshots']
+
+package_data = \
+{'': ['*']}
+
+install_requires = \
+['duckdb>=0.4.0', 'numpy', 'sqlalchemy>=1.3.19,<2.0.0']
+
+entry_points = \
+{'sqlalchemy.dialects': ['duckdb = duckdb_engine:Dialect']}
+
+setup_kwargs = {
+    'name': 'duckdb-engine',
+    'version': '0.6.7',
+    'description': 'SQLAlchemy driver for duckdb',
+    'long_description': '# duckdb_engine\n\n[![Supported Python Versions](https://img.shields.io/pypi/pyversions/duckdb-engine)](https://pypi.org/project/duckdb-engine/) [![PyPI version](https://badge.fury.io/py/duckdb-engine.svg)](https://badge.fury.io/py/duckdb-engine) [![PyPI Downloads](https://img.shields.io/pypi/dm/duckdb-engine.svg)](https://pypi.org/project/duckdb-engine/) [![codecov](https://codecov.io/gh/Mause/duckdb_engine/branch/master/graph/badge.svg)](https://codecov.io/gh/Mause/duckdb_engine)\n\nBasic SQLAlchemy driver for [DuckDB](https://duckdb.org/)\n\n<!--ts-->\n* [duckdb_engine](#duckdb_engine)\n   * [Installation](#installation)\n   * [Usage](#usage)\n   * [Configuration](#configuration)\n   * [How to register a pandas DataFrame](#how-to-register-a-pandas-dataframe)\n   * [Things to keep in mind](#things-to-keep-in-mind)\n      * [Auto-incrementing ID columns](#auto-incrementing-id-columns)\n      * [Pandas read_sql() chunksize](#pandas-read_sql-chunksize)\n      * [Unsigned integer support](#unsigned-integer-support)\n   * [Preloading extensions (experimental)](#preloading-extensions-experimental)\n   * [The name](#the-name)\n<!--te-->\n\n## Installation\n```sh\n$ pip install duckdb-engine\n```\n\nDuckDB Engine also has a conda feedstock available, the instructions for the use of which are available in it\'s [repository](https://github.com/conda-forge/duckdb-engine-feedstock).\n\n## Usage\n\nOnce you\'ve installed this package, you should be able to just use it, as SQLAlchemy does a python path search\n\n```python\nfrom sqlalchemy import Column, Integer, Sequence, String, create_engine\nfrom sqlalchemy.ext.declarative import declarative_base\nfrom sqlalchemy.orm.session import Session\n\nBase = declarative_base()\n\n\nclass FakeModel(Base):  # type: ignore\n    __tablename__ = "fake"\n\n    id = Column(Integer, Sequence("fakemodel_id_sequence"), primary_key=True)\n    name = Column(String)\n\n\neng = create_engine("duckdb:///:memory:")\nBase.metadata.create_all(eng)\nsession = Session(bind=eng)\n\nsession.add(FakeModel(name="Frank"))\nsession.commit()\n\nfrank = session.query(FakeModel).one()\n\nassert frank.name == "Frank"\n```\n\n## Usage in IPython/Jupyter\n\nWith IPython-SQL and DuckDB-Engine you can query DuckDB natively in your notebook!\nAlex Monahan has a great demo of this on [his blog](https://alex-monahan.github.io/2021/08/22/Python_and_SQL_Better_Together.html#an-example-workflow-with-duckdb)\n\n## Configuration\n\nYou can configure DuckDB by passing `connect_args` to the create_engine function\n```python\ncreate_engine(\n    \'duckdb:///:memory:\',\n    connect_args={\n        \'read_only\': True,\n        \'config\': {\n            \'memory_limit\': \'500mb\'\n        }\n    }\n)\n```\n\nThe supported configuration parameters are listed in the [DuckDB docs](https://duckdb.org/docs/sql/configuration)\n\n## How to register a pandas DataFrame\n\n```python\neng = create_engine("duckdb:///:memory:")\neng.execute("register", ("dataframe_name", pd.DataFrame(...)))\n\neng.execute("select * from dataframe_name")\n```\n\n## Things to keep in mind\nDuckdb\'s SQL parser is based on the PostgreSQL parser, but not all features in PostgreSQL are supported in duckdb. Because the `duckdb_engine` dialect is derived from the `postgresql` dialect, `SQLAlchemy` may try to use PostgreSQL-only features. Below are some caveats to look out for.\n\n### Auto-incrementing ID columns\nWhen defining an Integer column as a primary key, `SQLAlchemy` uses the `SERIAL` datatype for PostgreSQL. Duckdb does not yet support this datatype because it\'s a non-standard PostgreSQL legacy type, so a workaround is to use the `SQLAlchemy.Sequence()` object to auto-increment the key. For more information on sequences, you can find the [`SQLAlchemy Sequence` documentation here](https://docs.sqlalchemy.org/en/14/core/defaults.html#associating-a-sequence-as-the-server-side-default).\n\nThe following example demonstrates how to create an auto-incrementing ID column for a simple table:\n\n```python\n>>> import sqlalchemy\n>>> engine = sqlalchemy.create_engine(\'duckdb:////path/to/duck.db\')\n>>> metadata = sqlalchemy.MetaData(engine)\n>>> user_id_seq = sqlalchemy.Sequence(\'user_id_seq\')\n>>> users_table = sqlalchemy.Table(\n...     \'users\',\n...     metadata,\n...     sqlalchemy.Column(\n...         \'id\',\n...         sqlalchemy.Integer,\n...         user_id_seq,\n...         server_default=user_id_seq.next_value(),\n...         primary_key=True,\n...     ),\n... )\n>>> metadata.create_all(bind=engine)\n```\n\n### Pandas `read_sql()` chunksize\n\n**NOTE**: this is no longer an issue in versions `>=0.5.0` of `duckdb`\n\nThe `pandas.read_sql()` method can read tables from `duckdb_engine` into DataFrames, but the `sqlalchemy.engine.result.ResultProxy` trips up when `fetchmany()` is called. Therefore, for now `chunksize=None` (default) is necessary when reading duckdb tables into DataFrames. For example:\n\n```python\n>>> import pandas as pd\n>>> import sqlalchemy\n>>> engine = sqlalchemy.create_engine(\'duckdb:////path/to/duck.db\')\n>>> df = pd.read_sql(\'users\', engine)                ### Works as expected\n>>> df = pd.read_sql(\'users\', engine, chunksize=25)  ### Throws an exception\n```\n\n### Unsigned integer support\n\nUnsigned integers are supported by DuckDB, and are available in [`duckdb_engine.datatypes`](duckdb_engine/datatypes.py).\n\n## Preloading extensions (experimental)\n\nUntil the DuckDB python client allows you to natively preload extensions, I\'ve added experimental support via a `connect_args` parameter\n\n```python\nfrom sqlalchemy import create_engine\n\ncreate_engine(\n    \'duckdb:///:memory:\',\n    connect_args={\n        \'preload_extensions\': [\'https\'],\n        \'config\': {\n            \'s3_region\': \'ap-southeast-1\'\n        }\n    }\n)\n```\n\n## The name\n\nYes, I\'m aware this package should be named `duckdb-driver` or something, I wasn\'t thinking when I named it and it\'s too hard to change the name now\n',
+    'author': 'Elliana',
+    'author_email': 'me@mause.me',
+    'maintainer': 'None',
+    'maintainer_email': 'None',
+    'url': 'https://github.com/Mause/duckdb_engine',
+    'packages': packages,
+    'package_data': package_data,
+    'install_requires': install_requires,
+    'entry_points': entry_points,
+    'python_requires': '>=3.7',
+}
+
+
+setup(**setup_kwargs)
