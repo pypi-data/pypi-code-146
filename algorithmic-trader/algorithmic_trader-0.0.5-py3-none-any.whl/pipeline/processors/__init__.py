@@ -1,0 +1,10 @@
+import algotrader.pipeline.processors.assets_correlation
+import algotrader.pipeline.processors.candle_cache
+import algotrader.pipeline.processors.file_sink
+import algotrader.pipeline.processors.returns
+import algotrader.pipeline.processors.storage_provider_sink
+import algotrader.pipeline.processors.strategy
+import algotrader.pipeline.processors.technicals
+import algotrader.pipeline.processors.technicals_buckets_matcher
+import algotrader.pipeline.processors.technicals_normalizer
+import algotrader.pipeline.processors.timespan_change
