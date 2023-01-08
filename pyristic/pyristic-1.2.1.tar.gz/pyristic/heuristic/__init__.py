@@ -1,0 +1,5 @@
+from .GeneticAlgorithm_search import Genetic
+from .EvolutionStrategy_search import EvolutionStrategy
+from .EvolutiveProgramming_search import EvolutionaryProgramming
+from .SimulatedAnnealing_search import SimulatedAnnealing
+from .Tabu_search import TabuSearch
