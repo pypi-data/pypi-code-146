@@ -1,0 +1,166 @@
+﻿# coding=utf-8
+
+from lxml import etree
+
+class Coord:
+    def __init__(self, lat, lon):
+        self.lat = lat
+        self.lon = lon
+
+    def __str__(self):
+        return "(" + str(self.lat) + ", " + str(self.lon) + ")"
+
+class Element(etree._Element):
+    def __init__(self, element, data):
+        self.element = element
+        self.data = data
+
+    def get_element(self):
+        return self.element
+    
+    def get_tag_value(self, querried_tag):
+        for tag in self.element:
+            if tag.tag != "tag":
+                continue
+            if tag.attrib['k'] == querried_tag:
+                return tag.attrib['v']
+        return None
+
+    def get_keys(self):
+        returned = []
+        for tag in self.element:
+            if tag.tag != "tag":
+                continue
+            returned += [tag.attrib['k']]
+        return returned
+
+    def get_tag_dictionary(self):
+        returned = {}
+        for tag in self.element:
+            if tag.tag != "tag":
+                continue
+            key = tag.attrib['k']
+            value = tag.attrib['v']
+            returned[key] = value
+        return returned
+
+    def get_coords(self):
+        if self.element.tag == "node":
+            lat = float(self.element.attrib['lat'])
+            lon = float(self.element.attrib['lon'])
+            return Coord(lat, lon)
+
+        # elements obtained with 'out center;' in overpass
+        if self.element.tag == "way" or self.element.tag == "relation":
+            for tag in self.element:
+                if tag.tag != "center":
+                    continue
+                lat = float(tag.attrib['lat'])
+                lon = float(tag.attrib['lon'])
+                return Coord(lat, lon)
+
+        return self.data.get_coords_of_complex_object(self.element)
+
+    def get_bbox(self, verbose=False):
+        return self.data.get_bbox_of_object(self.element, verbose)
+
+    def get_type(self):
+        return self.element.tag
+
+    def get_id(self):
+        return self.element.attrib['id']
+
+    def get_link(self):
+        return ("https://www.openstreetmap.org/" + self.get_type() + "/" + self.get_id())
+
+    def get_id_edit_link(self):
+        return ("https://www.openstreetmap.org/edit?editor=id&" +  self.get_type() + "=" + self.get_id())
+
+class Data(object):
+    def __init__(self, filename_with_osm_data):
+        try:
+            self.data = etree.parse(filename_with_osm_data)
+        except etree.XMLSyntaxError as e:
+            print("failed to open", filename_with_osm_data)
+            raise e
+        self.node_database = {}
+        self.way_database = {}
+
+    def get_coords_of_object_in_database(self, id, database):
+        try:
+            if database[id] is None:
+                raise KeyError
+        except KeyError:
+            return None, None  # node outside of downloaded map
+        lat = database[id].lat
+        lon = database[id].lon
+        return lat, lon
+
+    def get_bbox_of_object(self, lxml_element, verbose=False):
+        if lxml_element.tag == "way" or lxml_element.tag == "relation":
+            return self.get_bbox_of_complex_object(lxml_element, verbose)
+        if lxml_element.tag == "node":
+            return self.get_bbox_of_node_object(lxml_element)
+
+    def get_bbox_of_node_object(self, lxml_element):
+        if lxml_element.tag == "node":
+            lat = float(lxml_element.attrib['lat'])
+            lon = float(lxml_element.attrib['lon'])
+            return {'min_lat': lat, 'min_lon': lon, 'max_lat': lat, 'max_lon': lon}
+        else:
+            raise ValueError("Not a proper lxml_element passed to get_bbox_of_node_object")
+
+    def get_bbox_of_complex_object(self, lxml_element, verbose=False):
+        min_lat = 180
+        max_lat = -180
+        min_lon = 180
+        max_lon = -180
+        if lxml_element.tag != "way" and lxml_element.tag != "relation":
+            raise ValueError("Not a proper lxml_element passed to get_coords_of_complex_object")
+        for tag in lxml_element:
+            if (tag.tag == "nd") or (tag.tag == "member" and tag.attrib['type'] == "node"):
+                node_id = int(tag.attrib['ref'])
+                lat, lon = self.get_coords_of_object_in_database(node_id, self.node_database)
+                if lat == None:
+                    if verbose:
+                        print("No data for node", node_id)
+                    return None
+            elif tag.tag == "member" and tag.attrib['type'] == "way":
+                way_id = int(tag.attrib['ref'])
+                lat, lon = self.get_coords_of_object_in_database(way_id, self.way_database)
+                if lat == None:
+                    if verbose:
+                        print("No data for way", way_id)
+                    return None
+            else:
+                continue
+            min_lat = min([min_lat, lat])
+            max_lat = max([max_lat, lat])
+            min_lon = min([min_lon, lon])
+            max_lon = max([max_lon, lon])
+        return {'min_lat': min_lat, 'min_lon': min_lon, 'max_lat': max_lat, 'max_lon': max_lon}
+
+    def get_coords_of_complex_object(self, lxml_element):
+        bb = self.get_bbox_of_complex_object(lxml_element)
+        if bb == None:
+            return None
+        return Coord((bb['min_lat'] + bb['max_lat']) / 2, (bb['min_lon'] + bb['max_lon']) / 2)
+
+
+    def iterate_over_data(self, fun):
+        for lxml_element in self.data.getiterator():
+            if lxml_element.tag == "node":
+                lat = float(lxml_element.attrib['lat'])
+                lon = float(lxml_element.attrib['lon'])
+                osm_id = int(lxml_element.attrib['id'])
+                self.node_database[osm_id] = Coord(lat, lon)
+        for lxml_element in self.data.getiterator():
+            if lxml_element.tag == "way":
+                coords = self.get_coords_of_complex_object(lxml_element)
+                osm_id = int(lxml_element.attrib['id'])
+                self.way_database[osm_id] = coords
+        for lxml_element in self.data.getiterator():
+            if lxml_element.tag != "node" and lxml_element.tag != "way" and lxml_element.tag != "relation":
+                continue
+            fun(Element(lxml_element, self))
+
