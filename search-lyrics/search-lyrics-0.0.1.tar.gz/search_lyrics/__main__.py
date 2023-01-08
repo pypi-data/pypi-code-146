@@ -1,0 +1,3 @@
+from search_lyrics import search_lyrics_entrypoint
+
+search_lyrics_entrypoint()
