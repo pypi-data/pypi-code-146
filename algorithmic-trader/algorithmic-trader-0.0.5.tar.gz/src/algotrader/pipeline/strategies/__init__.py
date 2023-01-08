@@ -1,0 +1,4 @@
+import algotrader.pipeline.strategies.connors_rsi2
+import algotrader.pipeline.strategies.history_bucket_compare
+import algotrader.pipeline.strategies.history_cosine_similarity
+import algotrader.pipeline.strategies.simple_sma
