@@ -1,0 +1,1 @@
+from .methylQA import MultiqcModule

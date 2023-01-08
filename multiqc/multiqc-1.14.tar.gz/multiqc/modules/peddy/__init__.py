@@ -1,0 +1,1 @@
+from .peddy import MultiqcModule

@@ -1,0 +1,1 @@
+from .clipandmerge import MultiqcModule

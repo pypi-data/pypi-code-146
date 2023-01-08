@@ -1,0 +1,1 @@
+from .kallisto import MultiqcModule

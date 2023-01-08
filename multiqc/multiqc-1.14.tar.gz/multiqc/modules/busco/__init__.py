@@ -1,0 +1,1 @@
+from .busco import MultiqcModule

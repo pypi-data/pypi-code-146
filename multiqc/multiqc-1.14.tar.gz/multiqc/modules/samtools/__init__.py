@@ -1,0 +1,1 @@
+from .samtools import MultiqcModule

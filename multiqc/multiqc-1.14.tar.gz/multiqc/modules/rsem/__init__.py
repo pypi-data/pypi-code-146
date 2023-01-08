@@ -1,0 +1,1 @@
+from .rsem import MultiqcModule

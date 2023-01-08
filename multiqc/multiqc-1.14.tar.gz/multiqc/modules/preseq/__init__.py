@@ -1,0 +1,1 @@
+from .preseq import MultiqcModule

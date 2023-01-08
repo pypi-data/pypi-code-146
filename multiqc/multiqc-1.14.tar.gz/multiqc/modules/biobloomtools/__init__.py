@@ -1,0 +1,1 @@
+from .biobloomtools import MultiqcModule

@@ -1,0 +1,1 @@
+from .fastqc import MultiqcModule

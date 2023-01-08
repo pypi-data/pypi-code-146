@@ -1,0 +1,1 @@
+from .bismark import MultiqcModule

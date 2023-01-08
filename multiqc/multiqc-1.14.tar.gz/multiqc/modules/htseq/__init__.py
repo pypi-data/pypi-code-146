@@ -1,0 +1,1 @@
+from .htseq import MultiqcModule

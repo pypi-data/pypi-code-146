@@ -1,0 +1,1 @@
+from .flexbar import MultiqcModule

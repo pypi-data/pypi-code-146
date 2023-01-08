@@ -1,0 +1,1 @@
+from .clusterflow import MultiqcModule

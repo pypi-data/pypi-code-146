@@ -1,0 +1,1 @@
+from .longranger import MultiqcModule

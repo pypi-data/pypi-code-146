@@ -1,0 +1,1 @@
+from .cutadapt import MultiqcModule

@@ -1,0 +1,1 @@
+from .conpair import MultiqcModule

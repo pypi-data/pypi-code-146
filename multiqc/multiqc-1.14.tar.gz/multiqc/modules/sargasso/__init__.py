@@ -1,0 +1,1 @@
+from .sargasso import MultiqcModule
