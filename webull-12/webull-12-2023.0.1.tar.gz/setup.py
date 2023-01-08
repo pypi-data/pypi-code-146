@@ -1,0 +1,35 @@
+import setuptools
+
+with open("README.md", "r") as fh:
+    long_description = fh.read()
+
+setuptools.setup(
+    name="webull-12",
+    version="2023.0.1",
+    description="The unofficial fork of webull [https://pypi.org/project/webull/]",
+    license='MIT',
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    url="https://github.com/tedchou12/webull.git",
+    packages=setuptools.find_packages(),
+    install_requires=[
+        "certifi>=2020.4.5.1",
+        "chardet>=3.0.4",
+        "idna>=2.9",
+        "numpy>=1.18.4",
+        "pandas>=0.25.3",
+        "python-dateutil>=2.8.1",
+        "pytz>=2020.1",
+        "requests>=2.23.0",
+        "six>=1.14.0",
+        "urllib3>=1.25.9",
+        "email-validator>=1.1.0",
+        "paho-mqtt>=1.6.0"
+    ],
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+    ],
+    python_requires='>=3.6',
+)
