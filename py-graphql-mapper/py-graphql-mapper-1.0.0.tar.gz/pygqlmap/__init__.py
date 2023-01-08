@@ -1,0 +1,1 @@
+from .gqlOperations import GQLQuery, GQLMutation
