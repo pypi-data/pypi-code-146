@@ -1,0 +1,1 @@
+from .samblaster import MultiqcModule

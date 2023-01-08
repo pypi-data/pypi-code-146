@@ -1,0 +1,1 @@
+from .hicup import MultiqcModule

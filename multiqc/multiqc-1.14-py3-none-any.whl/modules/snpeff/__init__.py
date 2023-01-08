@@ -1,0 +1,1 @@
+from .snpeff import MultiqcModule

@@ -1,0 +1,1 @@
+from .homer import MultiqcModule

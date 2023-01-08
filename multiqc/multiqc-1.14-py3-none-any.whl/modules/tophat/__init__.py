@@ -1,0 +1,1 @@
+from .tophat import MultiqcModule

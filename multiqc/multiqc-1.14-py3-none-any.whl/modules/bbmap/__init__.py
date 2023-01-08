@@ -1,0 +1,1 @@
+from .bbmap import MultiqcModule

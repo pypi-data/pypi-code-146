@@ -1,0 +1,1 @@
+from .bamtools import MultiqcModule

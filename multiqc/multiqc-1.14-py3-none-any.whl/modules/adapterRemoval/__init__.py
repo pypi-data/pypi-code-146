@@ -1,0 +1,1 @@
+from .adapterRemoval import MultiqcModule
