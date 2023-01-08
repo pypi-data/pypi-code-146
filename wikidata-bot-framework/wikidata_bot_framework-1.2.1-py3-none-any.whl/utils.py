@@ -1,0 +1,112 @@
+from collections import defaultdict
+from typing import List, MutableMapping, overload, Literal
+
+import pywikibot
+
+from .constants import session
+from .dataclasses import ExtraProperty
+
+
+def add_claim_locally(item: pywikibot.ItemPage, claim: pywikibot.Claim):
+    item.claims.setdefault(claim.getID(), []).append(claim)
+
+
+def add_qualifier_locally(claim: pywikibot.Claim, qualifier: pywikibot.Claim):
+    qualifier.isQualifier = True
+    claim.qualifiers.setdefault(qualifier.getID(), []).append(qualifier)
+
+
+def add_reference_locally(claim: pywikibot.Claim, *reference: pywikibot.Claim):
+    claim.sources.append(defaultdict(list))
+    for ref_claim in reference:
+        append_to_source(claim, ref_claim, len(claim.sources) - 1)
+
+
+def append_to_source(
+    claim: pywikibot.Claim, source: pywikibot.Claim, reference_group_index: int
+):
+    source.isReference = True
+    claim.sources[reference_group_index][source.getID()].append(source)
+
+
+def merge_reference_groups(
+    reference_group: defaultdict[str, list[pywikibot.Claim]],
+    new_references: list[pywikibot.Claim],
+) -> bool:
+    acted = False
+    for new_reference in new_references:
+        if not new_reference.getID() in reference_group:
+            reference_group[new_reference.getID()].append(new_reference)
+            acted = True
+    return acted
+
+
+class OutputHelper(
+    defaultdict[str, List[ExtraProperty]], MutableMapping[str, List[ExtraProperty]]
+):
+    def __init__(self):
+        super().__init__(list)
+
+    def add_property(self, prop: ExtraProperty):
+        self[prop.claim.getID()].append(prop)
+
+@overload
+def get_sparql_query(property_val: str, *, multiple_or=True, or_return_value=False, filter_out_unknown_value: bool = True) -> dict[str, str]: ...
+@overload
+def get_sparql_query(*property_values: str, multiple_or: Literal[True]=True, or_return_value: Literal[False]=False, filter_out_unknown_value: bool = True) -> list[str]: ...
+@overload
+def get_sparql_query(*property_values: str, multiple_or: Literal[True]=True, or_return_value: Literal[True]=True, filter_out_unknown_value: bool = True) -> dict[str, dict[str, str]]: ...
+@overload
+def get_sparql_query(*property_values: str, multiple_or: Literal[False]=False, or_return_value: bool=True, filter_out_unknown_value: bool = True) -> dict[str, dict[str, str]]: ...
+def get_sparql_query(*property_values: str, multiple_or=True, or_return_value=False, filter_out_unknown_value: bool = True):
+    """Get the requests of a SPARQL query.
+
+    Args:
+        multiple_mode (bool, optional): When specifying multiple values, whether to check for any one of them or all of them. Defaults to True.
+        or_return_value (bool, optional): When multiple_or is True, return the values. Defaults to False.
+        filter_out_unknown_value (bool, optional): Whether to filter out unknown/no values. Defaults to True.
+    """
+    if len(property_values) == 0:
+        raise ValueError("No property values specified.")
+    elif len(property_values) == 1:
+        multiple_or = False
+    if not multiple_or:
+        or_return_value = True
+    query = ""
+    if or_return_value:
+        query = "SELECT ?item " + " ".join(f"?prop{prop}" for prop in property_values)
+    else:
+        query = "SELECT ?item"
+    query += " WHERE {\n"
+    join_val = "UNION \n" if multiple_or else "\n"
+    if or_return_value:
+        query += join_val.join(
+            "{" + f"?item wdt:{prop} ?prop{prop} ." + "}" for prop in property_values
+        )
+    else:
+        query += join_val.join(
+            "{" + f"?item wdt:{prop} ?_ ." + "}" for prop in property_values
+        )
+    query += "\n}"
+    r = session.get(
+        "https://query.wikidata.org/sparql",
+        params={"query": query},
+        headers={"Accept": "application/sparql-results+json;charset=utf-8"},
+    )
+    r.raise_for_status()
+    data = r.json()
+    if not or_return_value:
+        return [item["item"]["value"].split("/")[-1] for item in data["results"]["bindings"]]
+    elif len(property_values) == 1:
+        return {
+            item["item"]["value"].split("/")[-1]: item[f"prop{property_values[0]}"]["value"]
+            for item in data["results"]["bindings"]
+        }
+    else:
+        retval = {
+            item["item"]["value"].split("/")[-1]: {
+                prop: (item[f"prop{prop}"]["value"] if f"prop{prop}" in item else None) for prop in property_values
+            }
+            for item in data["results"]["bindings"]
+        }
+        return dict(filter(lambda data: not any(".well-known" in str(val) for val in data[1].values()), retval.items())) if filter_out_unknown_value else retval
