@@ -1,0 +1,1 @@
+from aivtu.main import *
