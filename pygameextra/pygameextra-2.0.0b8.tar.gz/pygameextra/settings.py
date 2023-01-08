@@ -1,0 +1,11 @@
+enable_rundown = True
+auto_fps = True
+debugger = None
+recording = False
+recording_data = []
+mouse_position = None
+mouse_clicked = None
+enable_spoof = True
+button_timeout_time = .1
+button_lock = None
+button_lock_hold = True
