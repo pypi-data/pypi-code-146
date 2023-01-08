@@ -1,0 +1,38 @@
+import setuptools
+from setuptools import setup
+
+with open('README.md', 'r', encoding='utf-8') as fp:
+    long_description = fp.read()
+
+setup(
+    name='mwbzcl',
+    version='1.0.2',
+    description='A command-line client to interact with the MalwareBazaar API',
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    url="https://github.com/larsborn/MalwareBazaarClient",
+    project_urls={
+        "Bug Tracker": "https://github.com/larsborn/MalwareBazaarClient/issues",
+    },
+    classifiers=[
+        "Development Status :: 5 - Production/Stable",
+        "Environment :: Console",
+        "Operating System :: OS Independent",
+        "Programming Language :: Python :: 3",
+        "Topic :: Security",
+        "Topic :: Utilities",
+        "Intended Audience :: Developers",
+        "Intended Audience :: End Users/Desktop",
+        "Intended Audience :: Information Technology",
+        "Intended Audience :: Science/Research",
+        "License :: OSI Approved :: MIT License",
+    ],
+    author='Lars Wallenborn',
+    author_email='lars@wallenborn.net',
+    packages=setuptools.find_packages(),
+    install_requires=['requests', 'pyzipper'],
+    python_requires=">=3.7",
+    entry_points={
+        'console_scripts': ['mwbzcl = mwbzcl:main'],
+    },
+)
