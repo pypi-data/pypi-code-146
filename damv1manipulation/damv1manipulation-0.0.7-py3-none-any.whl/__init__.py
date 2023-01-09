@@ -1,0 +1,1 @@
+from .mymanipulationstring import general,telegram, variable_type, kwargs, listofdictionary
