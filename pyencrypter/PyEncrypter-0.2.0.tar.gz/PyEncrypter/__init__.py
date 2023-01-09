@@ -1,0 +1,1 @@
+from PyEncrypter.script import ObjInit, encrypt_1, encrypt_2, encrypt_3, decrypt_1, decrypt_2, decrypt_3
