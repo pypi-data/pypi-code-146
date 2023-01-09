@@ -1,0 +1,513 @@
+##############################################################################
+##
+# This file is part of Sardana
+##
+# http://www.sardana-controls.org/
+##
+# Copyright 2011 CELLS / ALBA Synchrotron, Bellaterra, Spain
+##
+# Sardana is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+##
+# Sardana is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+##
+# You should have received a copy of the GNU Lesser General Public License
+# along with Sardana.  If not, see <http://www.gnu.org/licenses/>.
+##
+##############################################################################
+
+"""
+    Macro library containning examples demonstrating specific features or tricks
+    for programming macros for Sardana.
+
+   Available Macros are:
+     ascanr
+     toothedtriangle
+
+"""
+
+__all__ = ["ascan_demo", "ascanr", "toothedtriangle",
+           "a2scan_mod"]
+
+__docformat__ = 'restructuredtext'
+
+import numpy
+
+from sardana.macroserver.macro import Macro, Hookable, Type
+from sardana.macroserver.scan import *
+
+
+class ascan_demo(Macro):
+    """
+    This is a basic reimplementation of the ascan` macro for demonstration
+    purposes of the Generic Scan framework. The "real" implementation of
+    :class:`sardana.macroserver.macros.ascan` derives from
+    :class:`sardana.macroserver.macros.aNscan` and provides some extra features.
+    """
+
+    # this is used to indicate other codes that the macro is a scan
+    hints = {'scan': 'ascan_demo'}
+    # this hints that the macro requires the ActiveMntGrp environment variable
+    # to be set
+    env = ('ActiveMntGrp',)
+
+    param_def = [
+        ['motor',      Type.Moveable, None, 'Motor to move'],
+        ['start_pos',  Type.Float,    None, 'Scan start position'],
+        ['final_pos',  Type.Float,    None, 'Scan final position'],
+        ['nr_interv',  Type.Integer,  None, 'Number of scan intervals'],
+        ['integ_time', Type.Float,    None, 'Integration time']
+    ]
+
+    def prepare(self, motor, start_pos, final_pos, nr_interv, integ_time, **opts):
+        # parse the user parameters
+        self.start = numpy.array([start_pos], dtype='d')
+        self.final = numpy.array([final_pos], dtype='d')
+        self.integ_time = integ_time
+
+        self.nb_points = nr_interv + 1
+        self.interv_size = (self.final - self.start) / nr_interv
+        self.name = 'ascan_demo'
+        # the "env" dictionary may be passed as an option
+        env = opts.get('env', {})
+
+        # create an instance of GScan (in this case, of its child, SScan
+        self._gScan = SScan(self, generator=self._generator,
+                            moveables=[motor], env=env)
+
+    def _generator(self):
+        step = {}
+        # integ_time is the same for all steps
+        step["integ_time"] = self.integ_time
+        for point_no in range(self.nb_points):
+            step["positions"] = self.start + point_no * \
+                self.interv_size  # note that this is a numpy array
+            step["point_id"] = point_no
+            yield step
+
+    def run(self, *args):
+        for step in self._gScan.step_scan():  # just go through the steps
+            yield step
+
+    @property
+    def data(self):
+        return self._gScan.data  # the GScan provides scan data
+
+    def _get_nr_points(self):
+        msg = ("nr_points is deprecated since version 3.0.3. "
+               "Use nb_points instead.")
+        self.warning(msg)
+        return self.nb_points
+
+    nr_points = property(_get_nr_points)
+
+
+class ascanr(Macro, Hookable):
+    """This is an example of how to handle adding extra info columns in a scan.
+    Does the same than ascan but repeats the acquisitions "repeat" times for each step.
+    It could be implemented deriving from aNscan, but I do it like this for clarity.
+    Look for the comments with "!!!" for tips specific to the extra info columns
+    I do not support constrains in this one for simplicity (see ascan for that)
+
+    Do an absolute scan of the specified motor, repeating measurements in each step.
+    ascanr scans one motor, as specified by motor. The motor starts at the
+    position given by start_pos and ends at the position given by final_pos.
+    At each step, the acquisition will be repeated "repeat" times
+    The step size is (start_pos-final_pos)/nr_interv. The number of data points collected
+    will be (nr_interv+1)*repeat. Count time for each acquisition is given by time which if positive,
+    specifies seconds and if negative, specifies monitor counts. """
+
+    hints = {'scan': 'ascanr', 'allowsHooks': (
+        'pre-move', 'post-move', 'pre-acq', 'post-acq', 'post-step')}
+    env = ('ActiveMntGrp',)
+
+    param_def = [
+        ['motor',      Type.Moveable, None, 'Motor to move'],
+        ['start_pos',  Type.Float,    None, 'Scan start position'],
+        ['final_pos',  Type.Float,    None, 'Scan final position'],
+        ['nr_interv',  Type.Integer,  None, 'Number of scan intervals'],
+        ['integ_time', Type.Float,    None, 'Integration time'],
+        ['repeat',     Type.Integer,  None, 'Number of Repetitions']
+    ]
+
+    def prepare(self, motor, start_pos, final_pos, nr_interv, integ_time, repeat,
+                **opts):
+
+        self.starts = numpy.array([start_pos], dtype='d')
+        self.finals = numpy.array([final_pos], dtype='d')
+        self.nr_interv = nr_interv
+        self.integ_time = integ_time
+        self.repeat = repeat
+        self.opts = opts
+
+        self.nb_points = nr_interv + 1
+        self.interv_sizes = (self.finals - self.starts) / nr_interv
+        self.name = 'ascanr'
+
+        generator = self._generator
+        moveables = [motor]
+        env = opts.get('env', {})
+        constrains = []
+        extrainfodesc = [ColumnDesc(name='repetition',
+                                    dtype='int64', shape=(1,))]  # !!!
+
+        self._gScan = SScan(self, generator, moveables, env,
+                            constrains, extrainfodesc)  # !!!
+
+    def _generator(self):
+        step = {}
+        step["integ_time"] = self.integ_time
+        step[
+            "post-acq-hooks"] = self.getHooks('post-acq') + self.getHooks('_NOHINT_')
+        step["post-step-hooks"] = self.getHooks('post-step')
+        step["check_func"] = []
+        extrainfo = {"repetition": 0}  # !!!
+        step['extrainfo'] = extrainfo  # !!!
+        for point_no in range(self.nb_points):
+            step["positions"] = self.starts + point_no * self.interv_sizes
+            step["point_id"] = point_no
+            for i in range(self.repeat):
+                extrainfo["repetition"] = i  # !!!
+                yield step
+
+    def run(self, *args):
+        for step in self._gScan.step_scan():
+            yield step
+
+    @property
+    def data(self):
+        return self._gScan.data
+
+    def _get_nr_points(self):
+        msg = ("nr_points is deprecated since version 3.0.3. "
+               "Use nb_points instead.")
+        self.warning(msg)
+        return self.nb_points
+
+    nr_points = property(_get_nr_points)
+
+
+class toothedtriangle(Macro, Hookable):
+    """toothedtriangle macro implemented with the gscan framework.
+    It performs nr_cycles cycles, each consisting of two stages: the first half
+    of the cycle it behaves like the ascan macro (from start_pos to stop_pos in
+    nr_interv+1 steps).For the second half of the cycle it steps back until
+    it undoes the first half and is ready for the next cycle.
+    At each step, nr_samples acquisitions are performed.
+    The total number of points in the scan is nr_interv*2*nr_cycles*nr_samples+1"""
+
+    hints = {'scan': 'toothedtriangle',
+             'allowsHooks': ('pre-scan', 'pre-move', 'post-move', 'pre-acq',
+                             'post-acq', 'post-step', 'post-scan')
+             }
+    env = ('ActiveMntGrp',)
+
+    param_def = [
+        ['motor',      Type.Moveable, None, 'Motor to move'],
+        ['start_pos',  Type.Float,    None, 'start position'],
+        ['final_pos',  Type.Float,    None, 'position after half cycle'],
+        ['nr_interv',  Type.Integer,  None, 'Number of intervals in half cycle'],
+        ['integ_time', Type.Float,    None, 'Integration time'],
+        ['nr_cycles',  Type.Integer,  None, 'Number of cycles'],
+        ['nr_samples', Type.Integer,  1, 'Number of samples at each point']
+    ]
+
+    def prepare(self, motor, start_pos, final_pos, nr_interv, integ_time,
+                nr_cycles, nr_samples, **opts):
+
+        self.start_pos = start_pos
+        self.final_pos = final_pos
+        self.nr_interv = nr_interv
+        self.integ_time = integ_time
+        self.nr_cycles = nr_cycles
+        self.nr_samples = nr_samples
+        self.opts = opts
+        cycle_nb_points = self.nr_interv + 1 + (self.nr_interv + 1) - 2
+        self.nb_points = cycle_nb_points * nr_samples * nr_cycles + nr_samples
+
+        self.interv_size = (self.final_pos - self.start_pos) / nr_interv
+        self.name = 'toothedtriangle'
+
+        generator = self._generator
+        moveables = []
+        moveable = MoveableDesc(moveable=motor, is_reference=True,
+                                min_value=min(start_pos, final_pos),
+                                max_value=max(start_pos, final_pos))
+        moveables = [moveable]
+        env = opts.get('env', {})
+        constrains = []
+        extrainfodesc = [ColumnDesc(name='cycle', dtype='int64', shape=(1,)),
+                         ColumnDesc(name='interval',
+                                    dtype='int64', shape=(1,)),
+                         ColumnDesc(name='sample', dtype='int64', shape=(1,))]  # !!!
+
+        self._gScan = SScan(self, generator, moveables, env,
+                            constrains, extrainfodesc)  # !!!
+
+    def _generator(self):
+        step = {}
+        step["integ_time"] = self.integ_time
+        step["pre-move-hooks"] = self.getHooks('pre-move')
+        step["post-move-hooks"] = self.getHooks('post-move')
+        step["pre-acq-hooks"] = self.getHooks('pre-acq')
+        step[
+            "post-acq-hooks"] = self.getHooks('post-acq') + self.getHooks('_NOHINT_')
+        step["post-step-hooks"] = self.getHooks('post-step')
+        step["check_func"] = []
+        extrainfo = {"cycle": None, "interval": None, "sample": None, }
+        step['extrainfo'] = extrainfo
+        halfcycle1 = list(range(self.nr_interv + 1))
+        halfcycle2 = halfcycle1[1:-1]
+        halfcycle2.reverse()
+        intervallist = halfcycle1 + halfcycle2
+        point_no = 0
+        for cycle in range(self.nr_cycles):
+            extrainfo["cycle"] = cycle
+            for interval in intervallist:
+                extrainfo["interval"] = interval
+                step["positions"] = numpy.array(
+                    [self.start_pos + (interval) * self.interv_size], dtype='d')
+                for sample in range(self.nr_samples):
+                    extrainfo["sample"] = sample
+                    step["point_id"] = point_no
+                    yield step
+                    point_no += 1
+
+        # last step for closing the loop
+        extrainfo["interval"] = 0
+        step["positions"] = numpy.array([self.start_pos], dtype='d')
+        for sample in range(self.nr_samples):
+            extrainfo["sample"] = sample
+            step["point_id"] = point_no
+            yield step
+            point_no += 1
+
+    def run(self, *args):
+        for step in self._gScan.step_scan():
+            yield step
+
+    @property
+    def data(self):
+        return self._gScan.data
+
+    def _get_nr_points(self):
+        msg = ("nr_points is deprecated since version 3.0.3. "
+               "Use nb_points instead.")
+        self.warning(msg)
+        return self.nb_points
+
+    nr_points = property(_get_nr_points)
+
+
+class a2scan_mod(Macro):
+    """a2scan_mod.
+    Do an a2scan with the particularity of different intervals per motor: int_mot1, int_mot2.
+    If int_mot2 < int_mot1, mot2 will change position every int(int_mot1/int_mot2) steps of mot1.
+    It uses the gscan framework.
+    """
+
+    hints = {'scan': 'a2scan_mod'}
+    env = ('ActiveMntGrp',)
+
+    param_def = [
+        ['motor1',      Type.Moveable, None, 'Motor 1 to move'],
+        ['start_pos1',  Type.Float,    None, 'Scan start position 1'],
+        ['final_pos1',  Type.Float,    None, 'Scan final position 1'],
+        ['nr_interv1',  Type.Integer,  None, 'Number of scan intervals of Motor 1'],
+        ['motor2',      Type.Moveable, None, 'Motor 2 to move'],
+        ['start_pos2',  Type.Float,    None, 'Scan start position 2'],
+        ['final_pos2',  Type.Float,    None, 'Scan final position 2'],
+        ['nr_interv2',  Type.Integer,  None, 'Number of scan intervals of Motor 2'],
+        ['integ_time',  Type.Float,    None, 'Integration time']
+    ]
+
+    def prepare(self, motor1, start_pos1, final_pos1, nr_interv1, motor2, start_pos2, final_pos2, nr_interv2, integ_time,
+                **opts):
+        self.name = 'a2scan_mod'
+        self.integ_time = integ_time
+        self.start_pos1 = start_pos1
+        self.final_pos1 = final_pos1
+        self.nr_interv1 = nr_interv1
+        self.start_pos2 = start_pos2
+        self.final_pos2 = final_pos2
+        self.nr_interv2 = nr_interv2
+
+        generator = self._generator
+        moveables = [motor1, motor2]
+        env = opts.get('env', {})
+        constraints = []
+        self._gScan = SScan(self, generator, moveables, env, constraints)
+
+    def _generator(self):
+        step = {}
+        step["integ_time"] = self.integ_time
+
+        start1, end1, interv1 = self.start_pos1, self.final_pos1, self.nr_interv1
+        start2, end2, interv2 = self.start_pos2, self.final_pos2, self.nr_interv2
+
+        # Prepare the positions
+        positions_m1 = numpy.linspace(start1, end1, interv1 + 1)
+        positions_m2 = numpy.linspace(start2, end2, interv2 + 1)
+
+        if interv1 > interv2:
+            positions_m2 = start2 + ((end2 - start2) / interv2) * (
+                numpy.arange(interv1 + 1) // (interv1 / interv2))
+        elif interv2 > interv1:
+            positions_m1 = start1 + ((end1 - start1) / interv1) * (
+                numpy.arange(interv2 + 1) // (interv2 / interv1))
+
+        point_id = 0
+        for pos1, pos2 in zip(positions_m1, positions_m2):
+            step['point_id'] = point_id
+            step['positions'] = [pos1, pos2]
+            yield step
+            point_id += 1
+
+    def run(self, *args):
+        for step in self._gScan.step_scan():
+            yield step
+
+
+class ascanc_demo(Macro):
+    """
+    This is a basic reimplementation of the ascanc` macro for demonstration
+    purposes of the Generic Scan framework. The "real" implementation of
+    :class:`sardana.macroserver.macros.ascanc` derives from
+    :class:`sardana.macroserver.macros.aNscan` and provides some extra features.
+    """
+
+    # this is used to indicate other codes that the macro is a scan
+    hints = {'scan': 'ascanc_demo'}
+    # this hints that the macro requires the ActiveMntGrp environment variable
+    # to be set
+    env = ('ActiveMntGrp',)
+
+    param_def = [
+        ['motor',      Type.Moveable, None, 'Motor to move'],
+        ['start_pos',  Type.Float,    None, 'Scan start position'],
+        ['final_pos',  Type.Float,    None, 'Scan final position'],
+        ['integ_time', Type.Float,    None, 'Integration time']
+    ]
+
+    def prepare(self, motor, start_pos, final_pos, integ_time, **opts):
+        self.name = 'ascanc_demo'
+        # parse the user parameters
+        self.start = numpy.array([start_pos], dtype='d')
+        self.final = numpy.array([final_pos], dtype='d')
+        self.integ_time = integ_time
+        # the "env" dictionary may be passed as an option
+        env = opts.get('env', {})
+
+        # create an instance of GScan (in this case, of its child, CScan
+        self._gScan = CScan(self,
+                            waypointGenerator=self._waypoint_generator,
+                            periodGenerator=self._period_generator,
+                            moveables=[motor],
+                            env=env)
+
+    def _waypoint_generator(self):
+        # a very simple waypoint generator! only start and stop points!
+        yield {"positions": self.start, "waypoint_id": 0}
+        yield {"positions": self.final, "waypoint_id": 1}
+
+    def _period_generator(self):
+        step = {}
+        step["integ_time"] = self.integ_time
+        point_no = 0
+        while(True):  # infinite generator. The acquisition loop is started/stopped at begin and end of each waypoint
+            point_no += 1
+            step["point_id"] = point_no
+            yield step
+
+    def run(self, *args):
+        for step in self._gScan.step_scan():
+            yield step
+
+
+class ascan_with_addcustomdata(ascan_demo):
+    '''
+    example of an ascan-like macro where we demonstrate how to pass custom data to the data handler.
+    This is an extension of the ascan_demo macro. Wemake several calls to `:meth:DataHandler.addCustomData`
+    exemplifying different features.
+    At least the following recorders will act on custom data:
+      - OutputRecorder (this will ignore array data)
+      - NXscan_FileRecorder
+      - SPEC_FileRecorder (this will ignore array data)
+    '''
+
+    def run(self, motor, start_pos, final_pos, nr_interv, integ_time, **opts):
+        # we get the datahandler
+        dh = self._gScan._data_handler
+        # at this point the entry name is not yet set, so we give it explicitly
+        # (otherwise it would default to "entry")
+        dh.addCustomData('Hello world1', 'dummyChar1',
+                         nxpath='/custom_entry:NXentry/customdata:NXcollection')
+        # this is the normal scan loop
+        for step in self._gScan.step_scan():
+            yield step
+        # the entry number is known and the default nxpath is used
+        # "/<currententry>/custom_data") if none given
+        dh.addCustomData('Hello world1', 'dummyChar1')
+        # you can pass arrays (but not all recorders will handle them)
+        dh.addCustomData(list(range(10)), 'dummyArray1')
+        # you can pass a custom nxpath *relative* to the current entry
+        dh.addCustomData('Hello world2', 'dummyChar2',
+                         nxpath='sample:NXsample')
+
+        # calculate a linear fit to the timestamps VS motor positions and store
+        # it
+        x = [r.data[motor.getName()] for r in self.data.records]
+        y = [r.data['timestamp'] for r in self.data.records]
+        fitted_y = numpy.polyval(numpy.polyfit(x, y, 1), x)
+        dh.addCustomData(fitted_y, 'fittedtime',
+                         nxpath='measurement:NXcollection')
+
+        # as a bonus, plot the fit
+        self.pyplot.plot(x, y, 'ro')
+        self.pyplot.plot(x, fitted_y, 'b-')
+        self.pyplot.draw()
+
+
+class ascanct_midtrigger(Macro):
+    """This macro demonstrates how to add an extra scan column with
+    the shifted positions of the motor corresponding to the middle of the
+    space interval. Be aware that the space interval does not
+    necessarily correspond to the middle of the acquisition interval
+    (remember about the latency time).
+
+    This macro does not export all the ascanct features e.g. hooks.
+    """
+
+    param_def = [['motor', Type.Moveable, None, 'Moveable name'],
+                 ['start_pos', Type.Float, None, 'Scan start position'],
+                 ['final_pos', Type.Float, None, 'Scan final position'],
+                 ['nr_interv', Type.Integer, None, 'Number of scan intervals'],
+                 ['integ_time', Type.Float, None, 'Integration time'],
+                 ['latency_time', Type.Float, 0, 'Latency time']]
+
+    def run(self, *args, **kwargs):
+        motor = args[0]
+        scan_macro = self.execMacro("ascanct", *args, **kwargs)
+        # we get the datahandler
+        # TODO: use public api to GScan object whenever
+        # https://gitlab.com/sardana-org/sardana/-/issues/784 gets solved
+        dh = scan_macro._gScan.data_handler
+        # calculate position corresponding to the middle space interval
+        positions = [r.data[motor.getName()] for r in scan_macro.data.records]
+        first_position = positions[0]
+        second_position = positions[1]
+        positive_direction = second_position > first_position
+        shift = abs(second_position - first_position) / 2
+        if positive_direction:
+            mid_positions = positions + shift
+        else:
+            mid_positions = positions - shift
+        # add custom data column to the measurement HDF5 group with the
+        # <motor_name>_mid name
+        dh.addCustomData(mid_positions, motor.getName() + '_mid',
+                         nxpath='measurement:NXcollection')
