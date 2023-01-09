@@ -1,0 +1,103 @@
+from django.contrib import admin
+from django.contrib import messages
+from django.core.exceptions import PermissionDenied
+from django.http import HttpResponseRedirect
+from django.urls import reverse_lazy
+from django.utils.translation import gettext_lazy as _
+from django.views.generic import TemplateView
+from django.views.generic import View
+
+try:
+    import uwsgi
+except ImportError:
+    pass
+
+
+class UwsgiStatus(TemplateView):
+    '''
+    uWSGI Status View
+    '''
+
+    template_name = 'uwsgi/uwsgi.html'
+
+    def get(self, request, *args, **kwargs):
+        if not request.user.is_superuser:
+            raise PermissionDenied
+
+        return super(UwsgiStatus, self).get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super(UwsgiStatus, self).get_context_data(**kwargs)
+        context.update(admin.site.each_context(self.request))
+        if uwsgi is None:
+            context['unavailable'] = True
+            return context
+        else:
+            from .stats import get_uwsgi_stats
+
+            context.update(get_uwsgi_stats())
+            return context
+
+
+class UwsgiCacheClear(View):
+    '''
+    Clear uWSGI Cache View
+    '''
+
+    def get(self, request):
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        if uwsgi is not None and uwsgi.masterpid() > 0:
+            uwsgi.cache_clear()
+            messages.add_message(request, messages.SUCCESS, _('uWSGI Cache cleared!'), fail_silently=True)
+        else:
+            messages.add_message(request, messages.ERROR, _('The uWSGI master process is not active'), fail_silently=True)
+        return HttpResponseRedirect(reverse_lazy('admin:django_uwsgi_status_changelist'))
+
+
+class UwsgiReload(View):
+    '''
+    Reload uWSGI View
+    '''
+
+    def get(self, request):
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        if uwsgi is not None and uwsgi.masterpid() > 0:
+            uwsgi.reload()
+            messages.add_message(request, messages.SUCCESS, _('uWSGI reloaded!'), fail_silently=True)
+        else:
+            messages.add_message(request, messages.ERROR, _('The uWSGI master process is not active'), fail_silently=True)
+        return HttpResponseRedirect(reverse_lazy('admin:django_uwsgi_status_changelist'))
+
+
+class UwsgiLog(View):
+    '''
+    uWSGI Log View
+    '''
+
+    def post(self, request):
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        if uwsgi is not None:
+            uwsgi.log(request.POST.get('log_message'))
+            messages.add_message(request, messages.SUCCESS, _('uWSGI Log message has been sent!'), fail_silently=True)
+        else:
+            messages.add_message(request, messages.ERROR, _('uWSGI is not available!'), fail_silently=True)
+        return HttpResponseRedirect(reverse_lazy('admin:django_uwsgi_status_changelist'))
+
+
+class UwsgiSignal(View):
+    '''
+    uWSGI Signal View
+    '''
+
+    def post(self, request):
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        if uwsgi is not None:
+            uwsgi.signal(int(request.POST.get('signal_number')))
+            messages.add_message(request, messages.SUCCESS, _('uWSGI signal has been sent!'), fail_silently=True)
+        else:
+            messages.add_message(request, messages.ERROR, _('uWSGI is not available!'), fail_silently=True)
+        return HttpResponseRedirect(reverse_lazy('admin:django_uwsgi_status_changelist'))
