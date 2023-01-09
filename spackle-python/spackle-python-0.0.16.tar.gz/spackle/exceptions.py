@@ -1,0 +1,2 @@
+class SpackleException(Exception):
+    pass
