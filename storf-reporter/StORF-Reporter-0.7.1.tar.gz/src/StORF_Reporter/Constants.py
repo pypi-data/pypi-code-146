@@ -1,0 +1,1 @@
+StORF_Reporter_Version = 'v0.7.0'
