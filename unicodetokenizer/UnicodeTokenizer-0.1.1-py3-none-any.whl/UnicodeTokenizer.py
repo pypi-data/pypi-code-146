@@ -1,0 +1,137 @@
+# -*- coding: utf-8 -*-
+
+import unicodedata
+
+
+def char_name(x):
+    try:
+        name = unicodedata.name(x).split(' ')[0]
+    except:
+        name = ""
+        # raiseExceptions(f"{x} no name")
+    return name
+
+
+class UnicodeTokenizer:
+    def __init__(self,  do_lower_case=True, never_split=[], high_UnicodePoint=10000, remove_blank=True):
+        self.do_lower_case = do_lower_case
+        self.high_UnicodePoint = high_UnicodePoint
+        self.never_split = set(x for x in never_split)
+        self.remove_blank=remove_blank
+
+    def is_blank(self,x):
+        return not bool(x.strip())
+    
+    def split_blank(self,line):
+        if len(line)==1:
+            return [line]
+        elif len(line)==0:
+            return []
+        marks = [self.is_blank(x) for x in line]
+        return self.split_marks(line,marks)
+
+    def split_marks(self,line,marks):
+        tokens = []
+        for i, x in enumerate(line):
+            if i == 0:
+                tokens.append(x)
+                continue
+            if marks[i] or marks[i-1]:
+                tokens.append(x)
+                continue
+            else:
+                tokens[-1] += x
+        return tokens
+
+    def normalize(self, line,  normal_type="NFD"):
+        l = unicodedata.normalize(normal_type, line)
+        return l
+    
+    def split_high_UnicodePoint(self,line):
+        if len(line) == 1:
+            return [line]
+        elif len(line) == 0:
+            return []
+        marks = [ord(x) > self.high_UnicodePoint for x in line]
+        return self.split_marks(line, marks)
+
+    def split_category(self,line):
+        if len(line) == 1:
+            return [line]
+        elif len(line) == 0:
+            return []
+        categorys=[ unicodedata.category(x)[0] for x in line ]
+        tokens = []
+        last_name=''
+        for i, x in enumerate(line):
+            if i == 0:
+                tokens.append(x)
+                continue
+            if categorys[i] == categorys[i-1] == 'L':
+                name = unicodedata.name(x).split(' ')[0]
+                if name==last_name:
+                    tokens[-1] += x
+                else:
+                    tokens.append(x)
+                last_name=name
+                continue
+            elif categorys[i] == categorys[i-1] == 'N':
+                name = unicodedata.name(x).split(' ')[0]
+                if name == last_name:
+                    tokens[-1] += x
+                else:
+                    tokens.append(x)
+                last_name = name
+                continue
+            else:
+                tokens.append(x)
+                if categorys[i]  in ['L','N']:
+                    last_name = unicodedata.name(x).split(' ')[0]
+        return tokens
+
+    def split_line(self, line):
+        words = self.split_blank(line)
+        tokens = []
+        for x in words:
+            if x in self.never_split:
+                tokens.append(x)
+            else:
+                if self.do_lower_case:
+                    x = self.normalize(x.lower())
+                us = self.split_blank(x)
+                for u in us:
+                    vs = self.split_high_UnicodePoint(u)
+                    for v in vs:
+                        w = self.split_category(v)
+                        tokens += w
+        return tokens
+
+    def tokenize(self, line):
+        tokens=self.split_line(line)
+        if self.remove_blank:
+            tokens=[x for x in tokens if x]
+        return tokens
+
+
+if __name__ == "__main__":
+    from logzero import logger
+
+
+    line = "'〇㎡[คุณจะจัดพิธีแต่งงานเมื่อไรคะัีิ์ื็ํึ]Ⅷpays-g[ran]d-blanc-élevé » (白高大夏國)😀熇'\x0000𧭏２０１９\U0010ffff"
+    tokenizer=UnicodeTokenizer()
+    logger.info((tokenizer.split_blank(line)))
+    # line = "=True"
+
+    tokenizer = UnicodeTokenizer()
+    logger.info(tokenizer.tokenize(line))
+    import timeit
+    # re=timeit.timeit("''.join(chr(x) for x in range(int(1e6))) ")
+    # logger.info(re)
+
+    import time
+    t0 = time.time()
+    for i in range(10000):
+        # chr(i)  # ValueError: chr() arg not in range(0x110000)
+        tokenizer.tokenize(line)
+    t1 = time.time()
+    logger.info(t1-t0)
