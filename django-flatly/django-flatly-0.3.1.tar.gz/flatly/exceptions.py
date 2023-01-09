@@ -1,0 +1,2 @@
+class InvalidTemplatePath(Exception):
+    pass
