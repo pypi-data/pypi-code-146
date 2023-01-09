@@ -1,0 +1,292 @@
+#!/usr/bin/env python
+
+##############################################################################
+##
+# This file is part of Sardana
+##
+# http://www.sardana-controls.org/
+##
+# Copyright 2011 CELLS / ALBA Synchrotron, Bellaterra, Spain
+##
+# Sardana is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+##
+# Sardana is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+##
+# You should have received a copy of the GNU Lesser General Public License
+# along with Sardana.  If not, see <http://www.gnu.org/licenses/>.
+##
+##############################################################################
+
+"""This is the macro server scan data output recorder module"""
+
+__all__ = ["JsonRecorder", "OutputRecorder"]
+
+__docformat__ = 'restructuredtext'
+
+import numpy
+import datetime
+import operator
+import weakref
+
+from taurus.core.util.containers import CaselessList
+
+from sardana.macroserver.scan.recorder.datarecorder import DataRecorder
+from sardana.macroserver.scan.recorder.storage import BaseFileRecorder
+import collections
+import numbers
+
+
+class JsonRecorder(DataRecorder):
+
+    def __init__(self, stream, cols=None, **pars):
+        DataRecorder.__init__(self, **pars)
+        self._stream = weakref.ref(stream)
+
+    def _startRecordList(self, recordlist):
+        macro_id = recordlist.getEnvironValue('macro_id')
+        title = recordlist.getEnvironValue('title')
+        counters = recordlist.getEnvironValue('counters')
+        scanfile = recordlist.getEnvironValue('ScanFile')
+        scandir = recordlist.getEnvironValue('ScanDir')
+        serialno = recordlist.getEnvironValue('serialno')
+        column_desc = recordlist.getEnvironValue('datadesc')
+        ref_moveables = recordlist.getEnvironValue('ref_moveables')
+        estimatedtime = recordlist.getEnvironValue('estimatedtime')
+        total_scan_intervals = recordlist.getEnvironValue(
+            'total_scan_intervals')
+        start_time = recordlist.getEnvironValue('starttime').ctime()
+        self.column_desc = []
+        discarded = []
+        for e in column_desc:
+            if len(e.shape) == 0:
+                self.column_desc.append(e)
+            else:
+                discarded.append(e.label)
+        if discarded:
+            self.info('The following data will not be json-serialized: %s',
+                      " ".join(discarded))
+        column_desc = [d.toDict() for d in self.column_desc]
+        data = {'column_desc': column_desc,
+                'ref_moveables': ref_moveables,
+                'estimatedtime': estimatedtime,
+                'total_scan_intervals': total_scan_intervals,
+                'starttime': start_time,
+                'title': title,
+                'counters': counters,
+                'scanfile': scanfile,
+                'scandir': scandir,
+                'serialno': serialno}
+        self._sendPacket(type="data_desc", data=data, macro_id=macro_id)
+
+    def _endRecordList(self, recordlist):
+        macro_id = recordlist.getEnvironValue('macro_id')
+        data = {'endtime': recordlist.getEnvironValue('endtime').ctime(),
+                'deadtime': recordlist.getEnvironValue('deadtime')}
+        self._sendPacket(type="record_end", data=data, macro_id=macro_id)
+
+    def _writeRecord(self, record):
+        macro_id = self.recordlist.getEnvironValue('macro_id')
+        data = {}  # dict(record.data)
+        for k in self.column_desc:
+            name = k.name
+            data[name] = record.data[name]
+        self._sendPacket(type="record_data", data=data, macro_id=macro_id)
+
+    def _sendPacket(self, **kwargs):
+        '''creates a JSON packet using the keyword arguments passed
+        and then sends it'''
+        self._stream()._sendRecordData(kwargs, codec='utf8_json')
+
+    def _addCustomData(self, value, name, **kwargs):
+        '''
+        The custom data will be sent as a packet with type='custom_data'
+        and its data will be the dictionary of keyword arguments passed to this
+        method plus 'name' and 'value'
+        '''
+        # try to convert to list to avoid serialization problems
+        try:
+            value = value.tolist()
+        except:
+            pass
+        macro_id = self._stream().getID()
+        data = dict(kwargs)  # shallow copy
+        data['name'] = name
+        data['value'] = value
+        self._sendPacket(type="custom_data", data=data, macro_id=macro_id)
+
+
+class OutputRecorder(DataRecorder):
+
+    def __init__(self, stream, cols=None, number_fmt='%8.4f', col_width=8,
+                 col_sep='  ', output_block=False, **pars):
+        DataRecorder.__init__(self, **pars)
+        self._stream = weakref.ref(stream)
+        if not number_fmt.startswith('%'):
+            number_fmt = '%%s' % number_fmt
+        self._number_fmt = number_fmt
+        self._col_sep = col_sep
+        self._col_width = col_width
+        if isinstance(cols, collections.abc.Sequence) and \
+                not isinstance(cols, str):
+            cols = CaselessList(cols)
+        elif isinstance(cols, numbers.Number):
+            cols = cols
+        else:
+            cols = None
+        self._columns = cols
+        self._output_block = output_block
+        self._header_shown = False
+
+    def _startRecordList(self, recordlist):
+        starttime = recordlist.getEnvironValue('starttime').ctime()
+        estimatedtime = recordlist.getEnvironValue('estimatedtime')
+        data_desc = recordlist.getEnvironValue('datadesc')
+        serialno = recordlist.getEnvironValue('serialno')
+        col_sep = self._col_sep
+        cols = self._columns
+        number_fmt = self._number_fmt
+        col_width = self._col_width
+        dh = recordlist.getDataHandler()
+
+        for fr in [r for r in dh.recorders if isinstance(r, BaseFileRecorder)]:
+            if not hasattr(self._stream, "getAllEnv") or \
+               "ScanRecorder" in list(self._stream.getAllEnv().keys()):
+                message = "%s from %s" % (
+                    fr.getFormat(), fr.__class__.__name__)
+            else:
+                message = "%s" % (fr.getFormat())
+            self._stream().info('Operation will be saved in %s (%s)',
+                              fr.getFileName(), message)
+
+        msg = "Scan #%d started at %s." % (serialno, starttime)
+        if not estimatedtime is None:
+            estimatedtime = datetime.timedelta(0, abs(estimatedtime))
+            msg += " It will take at least %s" % estimatedtime
+        self._stream().info(msg)
+
+        labels, col_names, col_sizes = [], [], []
+        header_rows, header_len = 1, 0
+        for col, column in enumerate(data_desc):
+            if not getattr(column, 'output', True):
+                continue
+            name = column.name
+            if isinstance(cols, collections.abc.Sequence) and name not in cols:
+                continue
+            if isinstance(cols, numbers.Number) and col >= cols:
+                break
+            col_names.append(name)
+            label = column.label.strip()
+            if len(label) > col_width:
+                label = label.split("/")
+            else:
+                label = [label]
+            header_rows = max(header_rows, len(label))
+            labels.append(label)
+            col_size = max(col_width, max(list(map(len, label))))
+            header_len += col_size
+            col_sizes.append(col_size)
+
+        nb_cols = len(col_names)
+        header_len += (nb_cols - 1) * len(col_sep)
+        self._labels = labels
+        self._col_names = col_names
+        self._col_sizes = col_sizes
+
+        header = [[] for i in range(header_rows)]
+        for col, (label, col_size) in enumerate(zip(labels, col_sizes)):
+            empty_row_nb = header_rows - len(label)
+            for row in range(empty_row_nb):
+                header[row].append(col_size * " ")
+            for i, l in enumerate(label):
+                header[i + empty_row_nb].append(l.center(col_size))
+        head = []
+        for header_row in header:
+            head.append(col_sep.join(header_row))
+
+        header = "\n".join(head)
+
+        cell_t_number = '%%%%(%%s)%s' % number_fmt[1:]
+
+        self._scan_line_t = [(col_names[0], '%%(%s)8d' % col_names[0])]
+        self._scan_line_t += [(name, cell_t_number % name)
+                              for name in col_names[1:]]
+        self._header = header
+
+    def _endRecordList(self, recordlist):
+        self._stream()._flushOutput()
+        starttime = recordlist.getEnvironValue('starttime')
+        endtime = recordlist.getEnvironValue('endtime')
+        deadtime = recordlist.getEnvironValue('deadtime')
+        setuptime = recordlist.getEnvironValue('setuptime')
+        motiontime = recordlist.getEnvironValue('motiontime')
+        totaltime = endtime - starttime
+        endtime = endtime.ctime()
+        serialno = recordlist.getEnvironValue('serialno')
+
+        dh = recordlist.getDataHandler()
+
+        for fr in [r for r in dh.recorders if isinstance(r, BaseFileRecorder)]:
+            self._stream().info('Operation saved in %s (%s)', fr.getFileName(),
+                              fr.getFormat())
+
+        endts = recordlist.getEnvironValue('endts')
+        startts = recordlist.getEnvironValue('startts')
+        totaltimets = endts - startts
+        deadtime_perc = deadtime * 100 / totaltimets
+        setuptime_perc = setuptime * 100 / totaltimets
+        motiontime_perc = motiontime * 100 / totaltimets
+        info_string = 'Scan #%s ended at %s, taking %s. ' + \
+                      'Dead time %.1f%% (setup time %.1f%%, motion dead time %.1f%%)'
+        self._stream().info(info_string % (serialno, endtime, totaltime,
+                                           deadtime_perc, setuptime_perc, motiontime_perc))
+
+    def _writeRecord(self, record):
+        if not self._header_shown:
+            # show column headers
+            self._stream()._output(self._header)
+            self._stream()._flushOutput()
+            self._header_shown = True
+        cells = []
+        for i, (name, cell) in enumerate(self._scan_line_t):
+            cell_data = record.data[name]
+            if isinstance(cell_data, numpy.ndarray):
+                cell = str(cell_data.shape)
+            elif cell_data is None:
+                cell = "<nodata>"
+            elif isinstance(cell_data, str):
+                # TODO: for SEP2 needs strings are enabled for visualizing
+                # value refs, previously "<string>" was printed. This may
+                # have side effects e.g. alignment of columns etc.. Check
+                # and fix it.
+                cell = cell_data
+            else:
+                cell %= record.data
+            cell = cell.strip()
+            cell = cell.center(self._col_sizes[i])
+            cells.append(cell)
+        scan_line = self._col_sep.join(cells)
+
+        if self._output_block:
+            self._stream()._outputBlock(scan_line)
+        else:
+            self._stream()._output(scan_line)
+
+        self._stream()._flushOutput()
+
+    def _addCustomData(self, value, name, **kwargs):
+        '''
+        The custom data will be added as an info line in the form:
+        Custom data: name : value
+        '''
+        if numpy.ndim(value) > 0:
+            v = 'Array(%s)' % str(numpy.shape(value))
+        else:
+            v = str(value)
+        self._stream()._output('Custom data: %s : %s' % (name, v))
+        self._stream()._flushOutput()
