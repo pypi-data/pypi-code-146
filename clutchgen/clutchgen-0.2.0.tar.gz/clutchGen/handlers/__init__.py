@@ -1,0 +1,6 @@
+from .create_template import handle_create_template
+from .delete_template import handle_delete_template
+from .edit_template import handle_edit_template
+from .generate_project import handle_generate_project
+from .list_templates import handle_list_templates
+from .template_info import handle_template_info
