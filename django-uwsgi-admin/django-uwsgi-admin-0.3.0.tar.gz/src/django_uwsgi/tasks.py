@@ -1,0 +1,14 @@
+import pickle
+
+from django.conf import settings
+from django.core.mail import get_connection
+
+from .decorators import spool
+
+BACKEND = getattr(settings, 'UWSGI_EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
+
+
+@spool
+def send_mail(arguments):
+    conn = get_connection(backend=BACKEND)
+    conn.send_messages([pickle.loads(arguments['body'])])
