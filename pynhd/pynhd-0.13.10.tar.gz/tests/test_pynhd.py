@@ -1,0 +1,314 @@
+"""Tests for PyNHD package."""
+import io
+import operator
+import os
+import sys
+from pathlib import Path
+
+import geopandas as gpd
+import numpy as np
+import pytest
+from shapely.geometry import MultiPoint, Point, box
+
+import pynhd as nhd
+from pynhd import NHD, NLDI, NHDPlusHR, PyGeoAPI, WaterData
+
+has_typeguard = True if sys.modules.get("typeguard") else False
+is_ci = os.environ.get("GH_CI") == "true"
+STA_ID = "01031500"
+station_id = f"USGS-{STA_ID}"
+site = "nwissite"
+UM = "upstreamMain"
+UT = "upstreamTributaries"
+
+
+def assert_close(a: float, b: float) -> bool:
+    assert np.isclose(a, b, rtol=1e-3).all()
+
+
+@pytest.fixture
+def trib():
+    comids = NLDI().navigate_byid(site, station_id, UT, "flowlines")
+    wd = WaterData("nhdflowline_network")
+    return wd.byid("comid", comids.nhdplus_comid.tolist())
+
+
+def test_epa():
+    data = nhd.epa_nhd_catchments(9533477, "curve_number")
+    assert_close(data["curve_number"].mean(axis=1), 75.576)
+
+    data = nhd.epa_nhd_catchments([9533477, 1440291], "comid_info")
+    assert data["comid_info"].loc[1440291, "TOCOMID"] == 1439303
+
+    data = nhd.epa_nhd_catchments(1440291, "catchment_metrics")
+    assert_close(data["catchment_metrics"].loc[1440291, "AvgWetIndxCat"], 579.532)
+    assert data["metadata"].loc["AvgWetIndxCat", "short_display_name"] == "Wetness Index"
+
+
+@pytest.mark.xfail(reason="Hydro is unstable.")
+def test_nhd_xs_resample():
+    main = NLDI().navigate_byid(site, station_id, UM, "flowlines")
+    flw = NHD("flowline_mr").byids("COMID", main.nhdplus_comid.tolist()).to_crs("epsg:3857")
+    main_nhd = nhd.prepare_nhdplus(flw, 0, 0, 0, purge_non_dendritic=True)
+    cs = nhd.network_xsection(main_nhd, 2000, 1000)
+    rs = nhd.network_resample(main_nhd, 2000)
+    assert len(cs) == 29 and len(rs) == 46
+
+
+class TestPyGeoAPI:
+    pygeoapi = PyGeoAPI()
+
+    def test_flowtrace(self):
+        coords = (1774209.63, 856381.68)
+        gs = gpd.GeoDataFrame(
+            {
+                "direction": [
+                    "none",
+                ]
+            },
+            geometry=[Point(coords)],
+            crs="ESRI:102003",
+        )
+        gdf = self.pygeoapi.flow_trace(coords, crs="ESRI:102003", direction="none")
+        gdfb = nhd.pygeoapi(gs, "flow_trace")
+        assert gdf.comid.iloc[0] == gdfb.comid.iloc[0] == 22294818
+
+    def test_splitcatchment(self):
+        coords = (-73.82705, 43.29139)
+        gs = gpd.GeoDataFrame(
+            {
+                "upstream": [
+                    False,
+                ]
+            },
+            geometry=[Point(coords)],
+            crs=4326,
+        )
+        gdf = self.pygeoapi.split_catchment(coords, crs=4326, upstream=False)
+        gdfb = nhd.pygeoapi(gs, "split_catchment")
+        assert gdf.catchmentID.iloc[0] == gdfb.catchmentID.iloc[0] == "22294818"
+
+    def test_elevation_profile(self):
+        coords = [(-103.801086, 40.26772), (-103.80097, 40.270568)]
+        gs = gpd.GeoDataFrame(
+            {
+                "numpts": [
+                    101,
+                ],
+                "dem_res": [
+                    1,
+                ],
+            },
+            geometry=[MultiPoint(coords)],
+            crs=4326,
+        )
+        gdf = self.pygeoapi.elevation_profile(coords, numpts=101, dem_res=1, crs=4326)
+        gdfb = nhd.pygeoapi(gs, "elevation_profile")
+
+        expected = 1299.8842
+        assert_close(gdf.iloc[-1, 2], expected)
+        assert_close(gdfb.iloc[-1, 2], expected)
+
+    def test_cross_section(self):
+        coords = (-103.80119, 40.2684)
+        gs = gpd.GeoDataFrame(
+            {
+                "width": [
+                    1000.0,
+                ],
+                "numpts": [
+                    101,
+                ],
+            },
+            geometry=[Point(coords)],
+            crs=4326,
+        )
+        gdf = self.pygeoapi.cross_section(coords, width=1000.0, numpts=101, crs=4326)
+        gdfb = nhd.pygeoapi(gs, "cross_section")
+
+        expected = 1301.482
+        assert_close(gdf.iloc[-1, 2], expected)
+        assert_close(gdfb.iloc[-1, 2], expected)
+
+
+class TestNLDI:
+    """Test NLDI service"""
+
+    nldi: NLDI = NLDI()
+
+    def test_navigate(self):
+        stm = self.nldi.navigate_byid(site, station_id, UM, site)
+        assert stm.shape[0] == 3
+
+    def test_navigate_distance(self):
+        st100 = self.nldi.navigate_byid(site, station_id, UM, site, distance=100)
+        assert st100.shape[0] == 3
+
+    def test_navigate_fsource(self):
+        pp = self.nldi.navigate_byid(site, station_id, UT, "huc12pp")
+        assert pp.shape[0] == 12
+
+    def test_navigate_loc(self):
+        wqp = self.nldi.navigate_byloc((-70, 44), UT, "wqp")
+        assert wqp.comid.iloc[0] == "6710923"
+
+    def test_comid_loc(self):
+        station = self.nldi.getfeature_byid(site, station_id)
+        lon = station.geometry[0].centroid.x
+        lat = station.geometry[0].centroid.y
+        comid = self.nldi.comid_byloc((lon, lat))
+        assert station.comid.values[0] == comid.comid.values[0] == "1722317"
+
+    def test_feature_loc(self):
+        station = self.nldi.getfeature_byid(site, station_id)
+        lon = round(station.geometry[0].centroid.x, 1)
+        lat = round(station.geometry[0].centroid.y, 1)
+        comid = self.nldi.feature_byloc((lon, lat))
+        assert station.comid.values[0] == "1722317" and comid.comid.values[0] == "1722211"
+
+    def test_basin(self):
+        eck4 = "+proj=eck4 +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=km"
+        basin = self.nldi.get_basins(STA_ID).to_crs(eck4)
+        split = self.nldi.get_basins(STA_ID, split_catchment=True).to_crs(eck4)
+        assert_close(split.area.values[0] - basin.area.values[0], 0.489)
+
+    def test_char(self):
+        tot, prc = self.nldi.getcharacteristic_byid(
+            "6710923", "local", char_ids="all", values_only=False
+        )
+        assert tot.CAT_BFI.values[0] == 57 and prc.CAT_BFI.values[0] == 0
+
+    @pytest.mark.skipif(has_typeguard, reason="Broken if Typeguard is enabled")
+    def test_feature_missing(self):
+        _, missing = self.nldi.feature_byloc([(45.2, -69.3), (-69.3, 45.2)])
+        assert len(missing) == 1
+
+    @pytest.mark.skipif(has_typeguard, reason="Broken if Typeguard is enabled")
+    def test_basin_missing(self):
+        _, missing = self.nldi.get_basins([STA_ID, "00000000"])
+        assert len(missing) == 1
+
+
+class TestNHDAttrs:
+    def test_meta_s3(self):
+        meta = nhd.nhdplus_attrs_s3()
+        assert len(meta) == 4281
+
+    def test_s3(self):
+        attr = nhd.nhdplus_attrs_s3("CAT_RECHG")
+        assert_close(attr[attr.CAT_RECHG > 0].CAT_RECHG.mean(), 132.5881)
+
+    def test_meta(self):
+        meta = nhd.nhdplus_attrs()
+        assert len(meta) == 592
+
+    def test_sb(self):
+        attr = nhd.nhdplus_attrs("BANKFULL")
+        assert_close(attr[attr.BANKFULL_WIDTH > 0].BANKFULL_WIDTH.mean(), 13.6633)
+
+
+class TestWaterData:
+    def test_byid_flw(self, trib):
+        assert_close(trib.lengthkm.sum(), 565.755)
+        assert trib.shape[0] == 432
+
+    def test_byid(self, trib):
+        wd = WaterData("catchmentsp")
+        ct = wd.byid("featureid", trib.comid.astype(str).to_list())
+        assert_close(ct.areasqkm.sum(), 773.954)
+
+    def test_bybox(self):
+        wd = WaterData("wbd12")
+        print(wd)
+        wb_g = wd.bygeom(box(-118.72, 34.118, -118.31, 34.518), predicate="INTERSECTS", xy=True)
+        wb_b = wd.bybox((-118.72, 34.118, -118.31, 34.518))
+        assert_close(wb_b.areasqkm.sum(), wb_g.areasqkm.sum())
+
+    def test_byfilter(self):
+        crs = "epsg:3857"
+        wd = WaterData("huc12", crs)
+        wb = wd.byfilter(f"huc12 LIKE '17030001%'", sort_attr="huc12")
+        huc12 = wb[wb.huc12 == "170300010602"].geometry
+        coords = (huc12.centroid.x, huc12.centroid.y)
+        hucs = wd.bydistance(coords, 100, crs)
+        assert wb.shape[0] == 52 and hucs.name[0] == "Upper Wenas River"
+
+
+class TestGCX:
+    def test_single(self):
+        empty = nhd.geoconnex()
+        gage = nhd.geoconnex(item="gages", query={"provider_id": "01031500"})
+        assert empty is None and (gage.nhdpv2_COMID == 1722317).sum() == 1
+
+    def test_multiple(self):
+        gcx = nhd.GeoConnex()
+        gcx.item = "hu02"
+        h2 = gcx.query({"HUC2": "02"})
+        h3 = gcx.query({"HUC2": "03"})
+        assert (h2.GNIS_ID == 2730132).sum() == (h3.GNIS_ID == 2730133).sum() == 1
+
+    def test_geometry(self):
+        gages = nhd.geoconnex(
+            item="gages", query={"geometry": (-69.7718, 45.0742, -69.3141, 45.4534)}
+        )
+        assert gages.shape[0] == 11
+
+
+def test_nhdphr():
+    hr = NHDPlusHR("flowline")
+    flwb = hr.bygeom((-69.77, 45.07, -69.31, 45.45))
+    flwi = hr.byids("permanent_identifier", ["103455178", "103454362", "103453218"])
+    flwf = hr.bysql("permanent_identifier IN ('103455178', '103454362', '103453218')")
+    assert flwb.shape[0] == 3887 and flwi["OBJECTID"].tolist() == flwf["OBJECTID"].tolist()
+
+
+@pytest.mark.xfail(reason="Hydroshare is unstable.")
+def test_nhdplus_vaa():
+    fname = Path("nhdplus_vaa.parquet")
+    vaa = nhd.nhdplus_vaa(fname)
+    fname.unlink()
+    assert_close(vaa.slope.max(), 4.6)
+
+
+def test_use_enhd(trib):
+    org_attrs = nhd.prepare_nhdplus(trib, 0, 0, 0, use_enhd_attrs=False)
+    enhd_attrs_na = nhd.prepare_nhdplus(trib, 0, 0, 0, use_enhd_attrs=False, terminal2nan=False)
+    enhd_attrs = nhd.prepare_nhdplus(trib, 0, 0, 0, use_enhd_attrs=True, terminal2nan=True)
+    assert (enhd_attrs.tocomid != org_attrs.tocomid).sum() and (
+        enhd_attrs_na.tocomid != enhd_attrs.tocomid
+    ).sum()
+
+
+def test_acc(trib):
+    flw = nhd.prepare_nhdplus(trib, 1, 1, 1, purge_non_dendritic=True)
+
+    qsim = nhd.vector_accumulation(
+        flw[["comid", "tocomid", "lengthkm"]],
+        operator.add,
+        "lengthkm",
+        ["lengthkm"],
+    )
+    flw = flw.merge(qsim, on="comid")
+    diff = flw.arbolatesu - flw.acc_lengthkm
+    assert_close(diff.abs().sum(), 439.451)
+
+
+def test_enhd_nx():
+    g, m, s = nhd.enhd_flowlines_nx()
+    assert g.number_of_nodes() == len(m) and s[0] == 8318775
+
+
+def test_huc12_nx():
+    g, m, s = nhd.mainstem_huc12_nx()
+    assert g.number_of_nodes() == len(m) and s[0] == "150301040501"
+
+
+def test_fcode():
+    fcode = nhd.nhd_fcode()
+    assert fcode.loc[57100, "Feature Type"] == "DAM"
+
+
+def test_show_versions():
+    f = io.StringIO()
+    nhd.show_versions(file=f)
+    assert "SYS INFO" in f.getvalue()
