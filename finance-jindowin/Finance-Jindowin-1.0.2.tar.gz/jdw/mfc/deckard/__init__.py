@@ -1,0 +1,1 @@
+from jdw.mfc.deckard.goslin import Goslin

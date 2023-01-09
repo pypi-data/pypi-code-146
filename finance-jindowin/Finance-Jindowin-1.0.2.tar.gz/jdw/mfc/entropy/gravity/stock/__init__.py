@@ -1,0 +1,1 @@
+from jdw.mfc.entropy.gravity.stock.daily import Daily
