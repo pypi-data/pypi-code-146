@@ -1,0 +1,342 @@
+# Copyright 2022 The DLRover Authors. All rights reserved.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import os
+import threading
+import time
+
+from kubernetes import client, config
+
+from dlrover.python.common.constants import DefaultResourceLimits, NodeType
+from dlrover.python.common.log import default_logger as logger
+from dlrover.python.common.node import NodeGroupResource, NodeResource
+from dlrover.python.scheduler.job import ElasticJob, JobArgs, NodeArgs
+
+NODE_SERVICE_PORTS = {
+    NodeType.WORKER: 3333,
+    NodeType.EVALUATOR: 3333,
+    NodeType.CHIEF: 3333,
+    NodeType.PS: 2222,
+    NodeType.MASTER: 3333,
+}
+
+JOB_SUFFIX = "-edljob-"
+
+
+def parse_bool(s: str):
+    return s.lower() in ["true", "yes", "t", "y"]
+
+
+def get_pod_name(job_name, pod_type, node_id):
+    return "%s-%s" % (job_name + JOB_SUFFIX + pod_type, str(node_id))
+
+
+class k8sClient(object):
+    _instance_lock = threading.Lock()
+
+    def __init__(self, namespace, job_name):
+        """
+        ElasticDL k8s client.
+
+        Args:
+            image_name: Docker image path for ElasticDL pod.
+            namespace: The name of the Kubernetes namespace where ElasticDL
+                pods will be created.
+            job_name: ElasticDL job name, should be unique in the namespace.
+                Used as pod name prefix and value for "elastic" label.
+            event_callback: If not None, an event watcher will be created and
+                events passed to the callback.
+            periodic_call_func: If not None, call this method periodically.
+        """
+        try:
+            if os.getenv("KUBERNETES_SERVICE_HOST"):
+                # We are running inside a k8s cluster
+                config.load_incluster_config()
+                logger.info("Load the incluster config.")
+            else:
+                # Use user's kube config
+                config.load_kube_config()
+                logger.info("Load the kube config file.")
+        except Exception as ex:
+            logger.error(
+                "Failed to load configuration for Kubernetes:\n%s", ex
+            )
+
+        self.client = client.CoreV1Api()
+        self.api_instance = client.CustomObjectsApi()
+        self._namespace = namespace
+        self._job_name = job_name
+
+    def list_namespaced_pod(self, label_selector):
+        try:
+            pod_list = self.client.list_namespaced_pod(
+                self._namespace,
+                label_selector=label_selector,
+            )
+            return pod_list
+        except Exception as e:
+            logger.warning(e)
+        return None
+
+    def create_custom_resource(self, group, version, plural, body):
+        try:
+            print(body)
+            self.api_instance.create_namespaced_custom_object(
+                group,
+                version,
+                "default",
+                plural,
+                body,
+            )
+        except client.rest.ApiException as e:
+            logger.error(
+                "Exception when calling CustomObjectsApi->",
+                "create_namespaced_custom_object: %s" % e,
+            )
+
+    def get_custom_resource(self, name, group, version, plural):
+        try:
+            crd_object = self.api_instance.get_namespaced_custom_object(
+                namespace=self._namespace,
+                name=name,
+                group=group,
+                version=version,
+                plural=plural,
+            )
+            return crd_object
+        except client.ApiException as e:
+            logger.warning("Exception when getting custom object: %s\n" % e)
+            return None
+
+    def get_configmap(self, name):
+        try:
+            configmap = self.client.read_namespaced_config_map(
+                namespace=self._namespace, name=name
+            )
+            return configmap
+        except client.ApiException as e:
+            logger.warning("Exception when getting configmap: %s\n" % e)
+            return None
+
+    def create_pod(self, pod):
+        try:
+            self.client.create_namespaced_pod(self._namespace, pod)
+            return True
+        except client.rest.ApiException as e:
+            logger.warning(
+                "Failed to create %s pod: %s\n", pod.metadata.name, e
+            )
+            return False
+
+    def get_pod(self, name):
+        try:
+            return self.client.read_namespaced_pod(
+                namespace=self._namespace, name=name
+            )
+        except client.ApiException as e:
+            logger.warning("Exception when reading pod %s: %s\n" % (name, e))
+            return None
+
+    def delete_pod(self, name):
+        try:
+            self.client.delete_namespaced_pod(
+                name,
+                self._namespace,
+                body=client.V1DeleteOptions(),
+            )
+            return True
+        except Exception as e:
+            logger.warning(e)
+            return False
+
+    def patch_labels_to_pod(self, name, labels_dict):
+        body = {"metadata": {"labels": labels_dict}}
+        try:
+            return self.client.patch_namespaced_pod(
+                name=name, namespace=self._namespace, body=body
+            )
+        except client.ApiException as e:
+            logger.warning("Exception when patching labels to pod: %s\n" % e)
+            return None
+
+    def patch_annotations_to_pod(self, name, annotations):
+        body = {"metadata": {"annotations": annotations}}
+        try:
+            return self.client.patch_namespaced_pod(
+                name=name, namespace=self._namespace, body=body
+            )
+        except client.ApiException as e:
+            logger.warning(
+                "Exception when patching annotations to pod: %s\n" % e
+            )
+            return None
+
+    def create_service(self, service):
+        try:
+            self.client.create_namespaced_service(self._namespace, service)
+            return True
+        except client.rest.ApiException as e:
+            logger.warning(
+                "Failed to create %s service: %s\n"
+                % (service.metadata.name, e)
+            )
+            return False
+
+    def patch_service(self, service_name, service):
+        try:
+            self.client.patch_namespaced_service(
+                service_name, self._namespace, service
+            )
+            return True
+        except client.rest.ApiException as e:
+            logger.warning(
+                "Failed to patch %s service: %s\n" % (service_name, e)
+            )
+            return False
+
+    def get_service(self, name):
+        try:
+            return self.client.read_namespaced_service(
+                # worker service has the same name as pod name
+                name=name,
+                namespace=self._namespace,
+            )
+        except client.ApiException:
+            return None
+
+    def create_pvc(self, pvc):
+        try:
+            self.client.create_namespaced_persistent_volume_claim(
+                self._namespace, pvc
+            )
+            return True
+        except client.rest.ApiException as e:
+            logger.warning(
+                "Failed to create %s persistent volume claim: %s\n"
+                % (pvc.metadata.name, e)
+            )
+            return False
+
+    @classmethod
+    def singleton_instance(cls, *args, **kwargs):
+        if not hasattr(k8sClient, "_instance"):
+            with k8sClient._instance_lock:
+                if not hasattr(k8sClient, "_instance"):
+                    k8sClient._instance = k8sClient(*args, **kwargs)
+        return k8sClient._instance
+
+
+class K8sElasticJob(ElasticJob):
+    def __init__(self, job_name, namespace):
+        """
+        ElasticJob manages Pods by K8s Python APIs. The example of an elastic
+        job is in dlrover/go/elasticjob_operator/config/samples/
+        elastic_v1alpha1_elasticjob.yaml
+        Args:
+            image_name: Docker image path for ElasticDL pod.
+            namespace: The name of the Kubernetes namespace where ElasticDL
+                pods will be created.
+            job_name: ElasticDL job name, should be unique in the namespace.
+                Used as pod name prefix and value for "elastic" label.
+        """
+        self._k8s_client = k8sClient.singleton_instance(namespace, job_name)
+        self._namespace = namespace
+        self._job_name = job_name
+
+    def get_node_name(self, type, id):
+        return get_pod_name(self._job_name, type, id)
+
+    def get_node_service_addr(self, type, id):
+        service_name = get_pod_name(self._job_name, type, id)
+        return "%s.%s.svc:%d" % (
+            service_name,
+            self._namespace,
+            NODE_SERVICE_PORTS[type],
+        )
+
+
+class K8sJobArgs(JobArgs):
+    def __init__(self, platform, namespace, job_name):
+        super(K8sJobArgs, self).__init__(platform, namespace, job_name)
+
+    def initilize(self):
+        self.user = os.getenv("USER", "")
+        k8s_client = k8sClient.singleton_instance(
+            self.namespace, self.job_name
+        )
+        job = self._retry_to_get_job(k8s_client)
+        self.job_uuid = self._get_job_uuid(job)
+        if "distributionStrategy" in job["spec"]:
+            self.distribution_strategy = job["spec"]["distributionStrategy"]
+        limit_config = job["spec"].get("resourceLimits", {})
+        self.resource_limits.cpu = float(
+            limit_config.get("cpu", DefaultResourceLimits.CPU_LIMIT)
+        )
+        self.resource_limits.memory = NodeResource.convert_memory_to_mb(
+            limit_config.get("memory", DefaultResourceLimits.MEMORY_LIMIT)
+        )
+        self.resource_limits.gpu_num = int(
+            limit_config.get("gpu", DefaultResourceLimits.GPU_LIMIT)
+        )
+
+        for replica, spec in job["spec"]["replicaSpecs"].items():
+            priority = spec.get("priority", "")
+            num = int(spec.get("replicas", 0))
+            print(spec["template"])
+            container = spec["template"]["spec"]["containers"][0]
+            resources = container.get("resources", {})
+            requests = resources.get("requests", {})
+            cpu = float(requests.get("cpu", 0))
+            if "memory" in requests:
+                memory = NodeResource.convert_memory_to_mb(requests["memory"])
+            else:
+                memory = 0
+            gpu_type = None
+            gpu_num = 0
+            for k, v in requests.items():
+                if "nvidia.com" in k:
+                    gpu_type = k
+                    gpu_num = int(v)
+            group_resource = NodeGroupResource(
+                num, NodeResource(cpu, memory, gpu_type, gpu_num), priority
+            )
+            restart_count = int(spec.get("restartCount", 3))
+            auto_scale = parse_bool(spec.get("autoScale", "True"))
+            restart_timeout = int(spec.get("restartTimeout", 0))
+            critical_nodes = spec.get("criticalNodes", "")
+            self.node_args[replica] = NodeArgs(
+                group_resource,
+                auto_scale,
+                restart_count,
+                restart_timeout,
+                critical_nodes,
+            )
+
+    def _retry_to_get_job(self, k8s_client: k8sClient):
+        for _ in range(3):
+            job = k8s_client.get_custom_resource(
+                name=self.job_name,
+                group="elastic.iml.github.io",
+                version="v1alpha1",
+                plural="elasticjobs",
+            )
+            if job:
+                return job
+            else:
+                time.sleep(5)
+        raise ValueError("Cannot get the training job %s" % self.job_name)
+
+    def _get_job_uuid(self, job):
+        if job and "uid" in job["metadata"]:
+            return job["metadata"]["uid"]
+        return ""
