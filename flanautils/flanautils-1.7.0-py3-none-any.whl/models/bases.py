@@ -1,0 +1,700 @@
+from __future__ import annotations  # todo0 remove when it's by default
+
+import base64
+import binascii
+import copy
+import datetime
+import json
+import pickle
+import pprint
+import typing
+from dataclasses import dataclass, field
+from enum import Enum
+from types import NoneType
+from typing import AbstractSet, Any, Iterable, Iterator, Sequence
+
+import pymongo.collection
+import pymongo.database
+from bson import ObjectId
+
+from flanautils import iterables
+
+
+class BytesBase:
+    """Base class for serialize objects to bytes with pickle."""
+
+    def __bytes__(self):
+        return pickle.dumps(self)
+
+    @classmethod
+    def from_bytes(cls, bytes_: bytes) -> Any:
+        return pickle.loads(bytes_)
+
+    def to_bytes(self):
+        return bytes(self)
+
+
+class CopyBase:
+    """Base class for copy and deepcopy objects."""
+
+    def copy(self) -> CopyBase:
+        return copy.copy(self)
+
+    def deep_copy(self) -> CopyBase:
+        return copy.deepcopy(self)
+
+
+class DictBase:
+    """Base class for serialize objects to dictionaries."""
+
+    def _dict_repr(self) -> Any:
+        """
+        Returns the dictionary representation of your object.
+
+        It is the only method that you would want to redefine in most cases to represent data.
+        """
+
+        return vars(self).copy()
+
+    @classmethod
+    def from_dict(cls, data: dict, lazy=True) -> DictBase:
+        """Classmethod that constructs an object given a dictionary."""
+
+        def decode_dict(cls_, data_: dict) -> Any:
+            new_data = copy.copy(data_)
+            type_hints = typing.get_type_hints(cls_)
+            for k, v in data_.items():
+                try:
+                    type_ = type_hints[k]
+                except (KeyError, TypeError):
+                    continue
+
+                type_origin = typing.get_origin(type_)
+                type_args = typing.get_args(type_)
+                try:
+                    value_type = type_args[-1]
+                except (IndexError, TypeError):
+                    value_type = type
+
+                match v:
+                    case dict() if issubclass(type_, DictBase) and lazy:
+                        continue
+                    case dict(dict_) if issubclass(type_, DictBase) and not lazy:
+                        new_data[k] = decode_dict(type_, dict_)
+                    case [*_, dict()] as list_ if not isinstance(list_, set) and type_origin and type_origin is not typing.Union and issubclass(type_origin, Iterable) and issubclass(value_type, DictBase) and not lazy:
+                        new_data[k] = [decode_dict(value_type, dict_) for dict_ in list_]
+                    case [*_, bytes()] as list_ if not lazy:
+                        try:
+                            new_data[k] = [pickle.loads(bytes_) for bytes_ in list_]
+                        except (pickle.UnpicklingError, EOFError):
+                            pass
+                    case bytes(bytes_):
+                        try:
+                            new_data[k] = pickle.loads(bytes_)
+                        except (pickle.UnpicklingError, EOFError):
+                            pass
+
+            return new_data if issubclass(cls_, dict) else cls_(**new_data)
+
+        return decode_dict(cls, data)
+
+    def to_dict(self, pickle_types: tuple | list = ()) -> Any:
+        """Returns the representation of the object as a dictionary."""
+
+        def encode_obj(obj_) -> Any:
+            match obj_:
+                case _ if isinstance(obj_, pickle_types):
+                    return pickle.dumps(obj_)
+                case MongoBase():
+                    return obj_.to_dict(pickle_types)
+                case [*_, _] as objs:
+                    return [encode_obj(obj) for obj in objs]
+                case _:
+                    return obj_
+
+        if not isinstance(dict_repr := self._dict_repr(), dict):
+            return dict_repr
+
+        # noinspection DuplicatedCode
+        self_vars = dict_repr.copy()
+        for k, v in self_vars.items():
+            self_vars[k] = encode_obj(v)
+
+        return self_vars
+
+
+class JSONBASE:
+    """Base class for serialize objects to JSON."""
+
+    def _json_repr(self) -> Any:
+        """
+        Returns the JSON representation of your object.
+
+        It is the only method that you would want to redefine in most cases to represent data.
+        """
+
+        return vars(self)
+
+    @classmethod
+    def from_json(cls, text: str) -> Any:
+        """Classmethod that constructs an object given a JSON string."""
+
+        def decode_str(obj_: Any) -> Any:
+            """Inner function to decode JSON strings to anything."""
+
+            if not isinstance(obj_, str):
+                return obj_
+            try:
+                bytes_ = base64.b64decode(obj_.encode(), validate=True)
+                decoded_obj = pickle.loads(bytes_)
+            except (binascii.Error, pickle.UnpicklingError, EOFError):
+                return obj_
+            return decoded_obj
+
+        def decode_list(obj_: Any) -> Any:
+            """Inner function to decode JSON lists to anything."""
+
+            return [decode_str(e) for e in obj_]
+
+        def decode_dict(cls_: Any, dict_: dict) -> Any:
+            """Inner function to decode JSON dictionaries to anything."""
+
+            kwargs = {}
+            for k, v in dict_.items():
+                k = decode_str(k)
+                v = decode_str(v)
+                if isinstance(v, dict):
+                    try:
+                        v = decode_dict(typing.get_type_hints(cls_)[k], v)
+                    except KeyError:
+                        pass
+                kwargs[k] = v
+            return cls_(**kwargs)
+
+        if not isinstance(text, str):
+            raise TypeError(f'must be str, not {type(text).__name__}')
+
+        obj = json.loads(text)
+        if isinstance(obj, str):
+            return decode_str(obj)
+        elif isinstance(obj, list):
+            return decode_list(obj)
+        elif isinstance(obj, dict):
+            return decode_dict(cls, obj)
+        else:
+            return obj
+
+    def to_json(self, pickle_types: tuple | list = (Enum,), indent: int = None) -> str:
+        """Returns the representation of the object as a JSON string."""
+
+        # noinspection PyProtectedMember,PyUnresolvedReferences
+        def json_encoder(obj: Any) -> Any:
+            if isinstance(obj, bytes):
+                return base64.b64encode(obj).decode()
+
+            match obj:
+                case obj if isinstance(obj, AbstractSet):
+                    return list(obj)
+                case JSONBASE():
+                    if isinstance(obj, pickle_types) and not obj._json_repr.__qualname__.startswith(obj.__class__.__name__):
+                        return pickle.dumps(obj)
+                    else:
+                        return obj._json_repr()
+                case (datetime.date() | datetime.datetime()) as date_time:
+                    return str(date_time)
+                case _:
+                    try:
+                        return json.dumps(obj, indent=indent)
+                    except TypeError:
+                        return repr(obj)
+
+        return json.dumps(self, default=json_encoder, indent=indent)
+
+
+class MeanBase:
+    """Base class for calculate the mean of objects."""
+
+    @classmethod
+    def mean(cls, objects: Sequence, ratios: list[float] = None, attribute_names: Iterable[str] = ()) -> MeanBase:
+        """
+        Classmethod that builds a new object calculating the mean of the objects in the iterable for the attributes
+        specified in attribute_names with the provided ratios.
+
+        When calculating the mean, if an attribute is None, the ratio given for that object is distributed among the
+        rest whose attributes with that name contain some value other than None.
+
+        By default, ratios is 1 / n_objects for every object in objects.
+        """
+
+        if not objects:
+            return cls()
+
+        n_objects = len(objects)
+        if not ratios:
+            ratios = [1 / n_objects for _ in objects]
+        elif len(ratios) != len(objects):
+            raise ValueError('Wrong ratios length')
+
+        # ----- updates the ratios depending on empty attributes -----
+        attributes_ratios = {}
+        attributes_ratios_length = {}
+        for attribute_name in attribute_names:
+            attributes_ratios[attribute_name] = ratios.copy()
+            attributes_ratios_length[attribute_name] = len(attributes_ratios[attribute_name])
+            for object_index, object_ in enumerate(objects):
+                if not object_ or getattr(object_, attribute_name, None) is None:
+                    attributes_ratios_length[attribute_name] -= 1
+                    try:
+                        ratio_part_to_add = attributes_ratios[attribute_name][object_index] / attributes_ratios_length[attribute_name]
+                    except ZeroDivisionError:
+                        ratio_part_to_add = 0
+                    attributes_ratios[attribute_name][object_index] = 0
+                    for ratio_index, _ in enumerate(attributes_ratios[attribute_name]):
+                        if attributes_ratios[attribute_name][ratio_index]:
+                            attributes_ratios[attribute_name][ratio_index] += ratio_part_to_add
+
+        attribute_values = {}
+        timezone: datetime.timezone | None = None
+        for attribute_name, attribute_ratios in attributes_ratios.items():
+            values = []
+            for object_, ratio in zip(objects, attribute_ratios):
+                if ratio:
+                    attribute = getattr(object_, attribute_name)
+                    if attribute_name in ('sunrise', 'sunset'):
+                        timezone = attribute.tzinfo
+                        attribute = attribute.timestamp()
+                    values.append(attribute * ratio)
+
+            if values:
+                final_value = sum(values)
+                if attribute_name in ('sunrise', 'sunset'):
+                    final_value = datetime.datetime.fromtimestamp(final_value, timezone)
+                attribute_values[attribute_name] = final_value
+
+        # noinspection PyArgumentList
+        return cls(**attribute_values)
+
+
+class MongoBase(DictBase, BytesBase):
+    """
+    Base class for mapping objects to mongo documents and vice versa (Object Document Mapper).
+
+    Dataclass compatible.
+    """
+
+    _id: ObjectId = None
+    subclasses: list = []
+    database: pymongo.database.Database = None
+    collection_name: str = None
+    collection: pymongo.collection.Collection = None
+    unique_keys: str | Iterable[str] = ()
+    nullable_unique_keys: str | Iterable[str] = ()
+
+    def __init__(self):
+        match self._id:
+            case str() if self._id:
+                super().__setattr__('_id', ObjectId(self._id))
+            case ObjectId() as object_id:
+                super().__setattr__('_id', object_id)
+            case _:
+                super().__setattr__('_id', ObjectId())
+
+        self._create_unique_indices()
+
+    def __init_subclass__(cls, **kwargs):
+        MongoBase.subclasses.append(cls)
+
+    def __post_init__(self):
+        MongoBase.__init__(self)
+
+    def __bytes__(self):
+        return pickle.dumps(self.to_dict())
+
+    def __eq__(self, other):
+        if unique_attributes := self.unique_attributes:
+            return isinstance(other, self.__class__) and unique_attributes == other.unique_attributes
+        else:
+            return isinstance(other, self.__class__) and self._id == other._id
+
+    def __getattribute__(self, attribute_name):
+        """
+        Advice: Do not redefine this method.
+
+        This very hacky method is called every time a class attribute is accessed. It is very difficult to implement
+        since it is called recursively.
+
+        So don't redefine this method if you don't really know how python treats objects internally.
+        """
+
+        value = super().__getattribute__(attribute_name)
+
+        if super().__getattribute__('database') is None:
+            return value
+
+        try:
+            type_ = typing.get_type_hints(super().__getattribute__('__class__'))[attribute_name]
+        except KeyError:
+            return value
+
+        match value:
+            case ObjectId() as object_id if issubclass(type_, MongoBase):
+                value = type_.find_one({'_id': object_id})
+            case [*_, ObjectId()] as object_ids if type_arg := iterables.find(typing.get_args(type_), MongoBase):
+                value = [result for object_id in object_ids if (result := type_arg.find_one({'_id': object_id}))]
+            case _:
+                return value
+
+        super().__setattr__(attribute_name, value)
+        return value
+
+    def __hash__(self):
+        if unique_attributes := self.unique_attributes:
+            return hash(tuple(unique_attributes.values()))
+        else:
+            return hash(self._id)
+
+    @classmethod
+    def _create_unique_indices(cls):
+        """Create the unique indices in the database based on unique_keys and nullable_unique_keys attributes."""
+
+        if cls.collection is None or not cls.unique_keys:
+            return
+
+        unique_keys = [(unique_key, pymongo.ASCENDING) for unique_key in cls.unique_keys]
+        type_filter = {'$type': ['number', 'string', 'object', 'array', 'binData', 'objectId', 'bool', 'date', 'regex',
+                                 'javascript', 'regex', 'timestamp', 'minKey', 'maxKey']}
+        partial_unique_filter = {nullable_unique_key: type_filter for nullable_unique_key in cls.nullable_unique_keys}
+
+        cls.collection.create_index(unique_keys, partialFilterExpression=partial_unique_filter, unique=True)
+
+    def _json_repr(self) -> Any:
+        self_vars = vars(self).copy()
+        self_vars['_id'] = repr(self_vars['_id'])
+
+        return self_vars
+
+    def _mongo_repr(self) -> Any:
+        """Returns the object representation to save in mongo database."""
+
+        return {k: v.value if isinstance(v, Enum) else v for k, v in self._dict_repr().items()}
+
+    def delete(self, cascade=False):
+        """
+        Delete the object from the database.
+
+        If cascade=True all referenced objects whose classes inherit from MongoBase are also deleted.
+        """
+
+        if self.collection is None:
+            return
+
+        if cascade:
+            for referenced_object in self.get_referenced_objects():
+                referenced_object.delete(cascade)
+
+        self.collection.delete_one({'_id': self._id})
+
+    @classmethod
+    def delete_many_raw(cls, *args, **kwargs):
+        if cls.collection is None:
+            return
+
+        cls.collection.delete_many(*args, **kwargs)
+
+    @classmethod
+    def find(
+        cls,
+        query: dict = None,
+        sort_keys: str | Iterable[str | tuple[str, int]] = (),
+        skip: int = None,
+        limit: int = None,
+        lazy=False
+    ) -> Iterator | list:
+        """Query the collection."""
+
+        def find_generator() -> Iterator:
+            for document in cursor:
+                yield cls.from_dict(document)
+
+        if cls.collection is None:
+            return iter([]) if lazy else []
+
+        match sort_keys:
+            case str():
+                sort_keys = ((sort_keys, pymongo.ASCENDING),)
+            case [[_, *_], *_]:
+                pass
+            case [*_]:
+                sort_keys = [(sort_key, pymongo.ASCENDING) for sort_key in sort_keys]
+
+        kwargs = {}
+        if skip is not None:
+            kwargs['skip'] = skip
+        if limit is not None:
+            kwargs['limit'] = limit
+        cursor: pymongo.cursor.Cursor = cls.collection.find(query, **kwargs)
+        if sort_keys:
+            cursor.sort(sort_keys)
+
+        if lazy:
+            return find_generator()
+        else:
+            return [cls.from_dict(document) for document in cursor]
+
+    def find_in_database_by_id(self, object_id: ObjectId) -> dict | None:
+        """Find an object in all database collections by its ObjectId."""
+
+        if self.database is None:
+            return
+
+        collections = (self.database[name] for name in self.database.list_collection_names())
+        return next((document for collection in collections if (document := collection.find_one({'_id': object_id}))), None)
+
+    @classmethod
+    def find_one(cls, query: dict = None, sort_keys: str | Iterable[str | tuple[str, int]] = ()) -> MongoBase | None:
+        """Query the collection and return the first match."""
+
+        return next(cls.find(query, sort_keys, lazy=True), None)
+
+    @classmethod
+    def find_one_raw(cls, *args, **kwargs):
+        if cls.collection is None:
+            return
+
+        return cls.collection.find_one(*args, **kwargs)
+
+    @classmethod
+    def find_raw(cls, *args, **kwargs):
+        if cls.collection is None:
+            return
+
+        return cls.collection.find(*args, **kwargs)
+
+    @classmethod
+    def from_bytes(cls, bytes_: bytes) -> Any:
+        return cls.from_dict(super().from_bytes(bytes_))
+
+    def get_referenced_objects(self, fields: Iterable[str] = None) -> list[MongoBase]:
+        """Returns all referenced objects whose classes inherit from MongoBase."""
+
+        data = vars(self)
+        if fields is not None:
+            data = {k: v for k, v in data.items() if k in fields}
+
+        referenced_objects = []
+        for k, v in data.items():
+            match v:
+                case MongoBase() as obj:
+                    referenced_objects.append(obj)
+                case [*_, MongoBase()] as objs:
+                    referenced_objects.extend(obj for obj in objs if isinstance(obj, MongoBase))
+
+        return referenced_objects
+
+    @classmethod
+    def init_database_attributes(cls, database: pymongo.database.Database):
+        """Initializes the attributes needed to connect the object to the database."""
+
+        for subclass in MongoBase.subclasses:
+            if subclass.collection_name is not None:
+                subclass.database = database
+                subclass.collection = database[subclass.collection_name]
+            if isinstance(subclass.unique_keys, str):
+                subclass.unique_keys = (subclass.unique_keys,)
+            if isinstance(subclass.nullable_unique_keys, str):
+                subclass.nullable_unique_keys = (subclass.nullable_unique_keys,)
+
+    @property
+    def object_id(self):
+        return self._id
+
+    def pull_from_database(
+        self,
+        overwrite_fields: Iterable[str] = ('_id',),
+        exclude_fields: Iterable[str] = (),
+        lazy=True
+    ):
+        """
+        Updates the values of the current object with the values of the same object located in the database.
+
+        By default, it updates the ObjectId and the attributes of the current object that contain None. You can specify
+        which fields are overwritten with overwrite_fields.
+
+        Ignore the attributes specified in exclude_fields.
+
+        If lazy=False (True by default) continue pulling elements inside iterables.
+        """
+
+        if self.collection is None:
+            return
+
+        unique_attributes = self.unique_attributes
+
+        if not unique_attributes or any(value is None for value in unique_attributes.values()):
+            query = {'_id': self._id}
+        else:
+            query = {}
+            for k, v in unique_attributes.items():
+                if isinstance(v, MongoBase):
+                    v.pull_from_database(overwrite_fields, exclude_fields, lazy)
+                    v = v._id
+                query[k] = v
+
+        if document := self.collection.find_one(query):
+            for database_key, database_value in vars(self.from_dict(document, lazy)).items():
+                self_value = getattr(self, database_key)
+                if (
+                        database_key not in exclude_fields
+                        and
+                        (
+                                database_key in overwrite_fields and database_value is not None
+                                or
+                                self_value is None
+                                or
+                                isinstance(self_value, Iterable) and not self_value
+                        )
+                ):
+                    super().__setattr__(database_key, database_value)
+
+    def resolve(self):
+        """Resolve all the ObjectId references (ObjectId -> MongoBase)."""
+
+        for k in vars(self):
+            getattr(self, k)
+
+    def save(
+        self,
+        fields: Iterable[str] = None,
+        pickle_types: tuple | list = (AbstractSet,),
+        references=True,
+        pull_overwrite_fields: Iterable[str] = ('_id',),
+        pull_exclude_fields: Iterable[str] = (),
+        pull_lazy=True
+    ):
+        """
+        Save (insert or update) the current object in the database.
+
+        fields: specify the fields to save. If not, the entire object is saved.
+        pickle_types: specified types are pickled before saving. (AbstractSet,) by default.
+        references: if it's True (by default), saves the objects without redundancy (MongoBase -> ObjectId).
+        pull_overwrite_fields: force overwriting those fields from the database before saving.
+        pull_exclude_fields: ignore overwriting those fields from the database before saving.
+        pull_lazy: continue pulling elements inside iterables.
+        """
+
+        if self.collection is None:
+            return
+
+        self.pull_from_database(pull_overwrite_fields, pull_exclude_fields, pull_lazy)
+        for referenced_object in self.get_referenced_objects(fields):
+            referenced_object.save(pickle_types=pickle_types, references=references, pull_overwrite_fields=pull_overwrite_fields, pull_exclude_fields=pull_exclude_fields, pull_lazy=pull_lazy)
+
+        data = self.to_mongo(pickle_types)
+        if fields is not None:
+            data = {k: v for k, v in data.items() if k in fields}
+
+        if references:
+            for k, v in data.items():
+                match v:
+                    case {'_id': ObjectId() as object_id}:
+                        data[k] = object_id
+                    case [*_, {'_id': ObjectId()}]:
+                        data[k] = [obj_data['_id'] for obj_data in v]
+
+        self.collection.find_one_and_update({'_id': self._id}, {'$set': data}, upsert=True)
+
+    def to_mongo(self, pickle_types: tuple | list = (AbstractSet,)) -> Any:
+        """Returns the representation of the object as a mongo compatible dictionary."""
+
+        def encode_obj(obj_) -> Any:
+            match obj_:
+                case MongoBase() if not isinstance(obj_, pickle_types):
+                    return obj_.to_mongo(pickle_types)
+                case [*_, _] as objs:
+                    return [encode_obj(obj) for obj in objs]
+                case _ if not isinstance(obj_, (NoneType, int, float, str, bool, bytes, Sequence, dict, datetime.date, datetime.datetime, ObjectId)):
+                    return pickle.dumps(obj_)
+                case _:
+                    return obj_
+
+        if not isinstance(mongo_repr := self._mongo_repr(), dict):
+            return mongo_repr
+
+        # noinspection DuplicatedCode
+        self_vars = mongo_repr.copy()
+        for k, v in self_vars.items():
+            self_vars[k] = encode_obj(v)
+
+        return self_vars
+
+    @property
+    def unique_attributes(self):
+        """
+        Property that returns a dictionary with the name of the attributes that must be unique in the database and their
+        values.
+        """
+
+        unique_attributes = {}
+        for unique_key in self.unique_keys:
+            attribute_value = getattr(self, unique_key, None)
+            unique_attributes[unique_key] = attribute_value.value if isinstance(attribute_value, Enum) else attribute_value
+
+        return unique_attributes
+
+
+@dataclass(eq=False)
+class DCMongoBase(MongoBase):
+    """Base class to be inherited by an unfrozen dataclass."""
+
+    _id: ObjectId = field(kw_only=True, default_factory=ObjectId)
+
+
+@dataclass(eq=False, frozen=True)
+class FrozenDCMongoBase(MongoBase):
+    """Base class to be inherited by a frozen dataclass."""
+
+    _id: ObjectId = field(kw_only=True, default_factory=ObjectId)
+
+
+class REPRBase(DictBase):
+    """Base class for a nicer objects representation."""
+
+    def __repr__(self):
+        # values = vars(self).values()
+        # return f"{self.__class__.__name__}({', '.join(repr(v) for v in values)})"
+        return str(self)
+
+    def __str__(self):
+        formatted = pprint.pformat(self.to_dict())
+        return f'{self.__class__.__name__} {formatted[0]}\n {formatted[1:-1]}\n{formatted[-1]}'  # todo1 someday improve the internal objects appearance
+
+
+class FlanaBase(REPRBase, JSONBASE, CopyBase, BytesBase):
+    """Useful mixin."""
+
+
+# noinspection PyPropertyDefinition
+class FlanaEnum(JSONBASE, DictBase, CopyBase, BytesBase, Enum):
+    """Useful mixin for enums."""
+
+    def _dict_repr(self) -> Any:
+        return self
+
+    def _json_repr(self) -> Any:
+        return bytes(self)
+
+    @classmethod
+    @property
+    def items(cls) -> list[tuple[str, Any]]:
+        # noinspection PyTypeChecker
+        return [item for item in zip(cls.keys, cls.values)]
+
+    @classmethod
+    @property
+    def keys(cls) -> list[str]:
+        return [element.name for element in cls]
+
+    @classmethod
+    @property
+    def values(cls) -> list:
+        return [element.value for element in cls]
