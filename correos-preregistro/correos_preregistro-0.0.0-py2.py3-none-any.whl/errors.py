@@ -1,0 +1,2 @@
+class ErrorDecodingPDFLabel(Exception):
+    pass
