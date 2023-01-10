@@ -1,0 +1,103 @@
+HOIST_DESC = "Hoist repeated code outside conditional statement"
+HOIST_IF_DESC = "Hoist conditional out of nested conditional"
+HOIST_FOR_DESC = "Hoist for/while loops out of nested conditionals"
+HOIST_COND_DESC = "Lift repeated conditional into its own if statement"
+HOIST_FOR_WHILE_BODY_DESC = "Hoist statements out of for/while loops"
+EXTRACT_CONSTANT_DESC = "Extract constants"
+EXTRACT_VARIABLE_DESC = "Extract variables"
+EXTRACT_DUP_METHOD_DESC = "Extract duplicate code into method"
+EXTRACT_DUP_FUNCTION_DESC = "Extract duplicate code into function"
+EXTRACT_METHOD_DESC = "Extract code out into method"
+EXTRACT_METHOD_CLASS = "Extract duplicate code from different methods into a new one"
+EXTRACT_FUNC_DESC = "Extract code out into function"
+AUG_ASSIGN_DESC = "Replace assignment with augmented assignment"
+SIMPLIFY_COMP_DESC = "Simplify numeric comparison"
+FLIP_COMP_DESC = "Ensure constant in comparison is on the right"
+NONE_COMP_DESC = "Use x is None rather than x == None"
+MINMAX_DESC = "Replace comparison with min/max call"
+OR_IFEXP_DESC = "Simplify if expression by using or"
+BIN_OP_DESC = "Simplify binary operation"
+SQUARE_DESC = "Replace x * x with x ** 2"
+MERGE_REPEATED_IFS_DESC = "Merge repeated if statements into single if"
+SPLIT_OR_IFS_DESC = "Split conditional into multiple branches"
+SWAP_IFELSE_DESC = "Swap if/else branches"
+REMOVE_PASS_BODY_DESC = "Swap if/else to remove empty if body"
+REMOVE_PASS_ELIF_DESC = "Remove empty elif clause"
+SWAP_NESTED_DESC = "Swap positions of nested conditionals"
+IF_EXP_DESC = "Replace if statement with if expression"
+DEMORGAN_DESC = "Simplify logical expression using De Morgan identities"
+INVERT_ANYALL_DESC = "Invert any/all to simplify comparisons"
+INVERT_ANYALL_BODY_DESC = "Invert any/all and simplify generator expression"
+MOVE_ASSIGN_DESC = "Move assignments closer to their usage"
+INLINE_ASSIGN_DESC = "Inline variable that is immediately returned"
+INLINE_VAR_DESC = "Inline variable that is only used once"
+LIFT_RETURN_INTO_IF_DESC = "Lift return into if"
+ORDER_DESC = "Re-order statements into logical groupings"
+REMOVE_IFS_DESC = "Remove redundant conditional"
+REMOVE_UNREACHABLE_DESC = "Remove unreachable code"
+REMOVE_REDUNDANT_PASS = "Remove redundant pass statement"
+REMOVE_REDUNDANT_CONTINUE = "Remove redundant continue statement"
+REMOVE_ELSE_AFTER_GUARD = "Remove unnecessary else after guard condition"
+REINTRODUCE_ELSE = "Lift code into else after jump in control flow"
+
+MERGE_SWITCH_DESC = "Simplify conditional into switch-like form"
+GUARD_DESC = "Add guard clause"
+GUARD_ELIF = "Extract guard clause from elif block"
+
+RANGE_ZERO_DESC = "Replace range(0, x) with range(x)"
+RANGE_STEP_DESC = "Replace range(x, y, 1) with range(x, y)"
+
+ISINSTANCE_DESC = "Merge isinstance calls"
+SIMPLIFY_ANY_DESC = "Replace any() with 'in'"
+CALL_TO_COMP_DESC = "Replace list(), dict() or set() with comprehension"
+
+MERGE_APPEND_DESC = "Merge append into list declaration"
+MERGE_EXTEND_DESC = "Merge extend into list declaration"
+MERGE_SET_ADD_DESC = "Merge add into set declaration"
+MERGE_DICT_DESC = "Merge dictionary assignment with declaration"
+MERGE_COMPARISON_DESC = (
+    "Replace multiple comparisons of same variable with `in` operator"
+)
+SIMPLIFY_BOOL_COMP_DESC = "Simplify comparison to boolean"
+SIMPLIFY_STR_LEN_COMP = "Simplify comparison to string length"
+
+USE_COUNT_DESC = "Use count() instead of sum()"
+USE_LEN_DESC = "Simplify call to sum into call to len()"
+SIMPLIFY_SUM_DESC = "Simplify constant sum() call"
+
+USE_ANY_DESC = "Use any() instead of for loop"
+FOR_INDEX_DESC = "Replace index in for loop with direct reference"
+USE_ITEMS_DESC = "Use items() to directly unpack dictionary values"
+
+YIELD_FROM_DESC = "Replace yield inside for loop with yield from"
+WHILE_TO_FOR_DESC = "Replace while with for"
+ENUMERATE_DESC = "Replace manual loop counter with call to enumerate"
+SIMPLIFY_GEN_DESC = "Simplify generator expression"
+DEFAULT_GET_DESC = "Simplify dictionary access using default get"
+REMOVE_KEYS_DESC = "Remove unnecessary call to keys()"
+COMP_TO_GEN_DESC = "Replace unneeded comprehension with generator"
+
+USE_ASSIGN_VAR_DESC = "Use previously assigned local variable"
+
+FILE_CLOSURE_DESC = "Use `with` when opening file to ensure closure"
+SIMPLIFY_NEG_INDEX_DESC = "Simplify accessing last index of list"
+CONSTANT_COLL_DESC = "Use set when checking membership of a collection of literals"
+
+STRUCTURAL_DESC = "Restructure and simplify code"
+SWAP_VAR_DESC = "Swap variable values with tuple assignment"
+MERGE_INTO_ELIF_DESC = "Merge else clause's nested if statement into elif"
+FLATTEN_NESTED_TRY_DESC = "Merge nested try-statement into a single try"
+MERGE_EXCEPT_HANDLERS_DESC = "Merge except handlers with identical code blocks"
+TERNARY_TO_IF_EXP_DESC = "Replace boolean ternary with inline if expression"
+REMOVE_REDUNDANT_FSTRING_DESC = (
+    "Replace f-string with no interpolated values with string"
+)
+SIMPLIFY_DICT_UPDATE_DESC = (
+    "Add single value to dictionary directly rather than using update()"
+)
+
+REMOVE_EMPTY_NESTED_BLOCK = "Remove nested block which has no effect"
+REMOVE_UNUSED_ENUMERATE_INDEX = (
+    "Remove unnecessary calls to `enumerate` when the index is not used"
+)
+ELSE_ON_LOOP_DESC = "If else clause is always executed move code to same level as loop"
