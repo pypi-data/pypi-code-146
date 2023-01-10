@@ -1,0 +1,21 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+
+def load_model(df):
+    
+    dir_location = os.path.join(os.path.dirname(__file__), 'Model')
+    
+    #Load model
+    model = keras.models.load_model(dir_location)
+    
+    return model
+
+
+# In[ ]:
+
+
+
+
