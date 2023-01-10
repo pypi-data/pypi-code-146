@@ -1,0 +1,1 @@
+from salure_helpers.mandrill.mail_client import MailClient
