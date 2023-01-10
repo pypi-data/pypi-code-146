@@ -1,0 +1,130 @@
+import argparse
+import enum
+import ipaddress
+import logging
+import os
+from typing import TypeVar, Union
+
+_logger = logging.getLogger(__name__)
+
+CLIENT_NAME_SIZE = 8
+INTERVAL_TIME = 1
+DEFAULT_PORT = 2773
+DEFAULT_API_PORT = 7773
+DEFAULT_HTTP_PORT = 8773
+DEFAULT_LOG_LEVEL = "info"
+LOG_FORMAT = "{asctime} [{levelname:^8}] {message}"
+
+LOG_LEVELS = {
+    "critical": logging.CRITICAL,
+    "debug": logging.DEBUG,
+    "error": logging.ERROR,
+    "info": logging.INFO,
+    "warn": logging.WARN,
+    "warning": logging.WARNING,
+}
+
+IPvXAddress = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
+IPvXNetwork = Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
+
+
+class InvalidPackage(Exception):
+    """Generic exception for package specific exceptions"""
+
+
+class InvalidPackageType(InvalidPackage):
+    """The package type is unknown"""
+
+
+class DuplicatePackageType(InvalidPackage):
+    """The package types aren't unique between all registered packages"""
+
+
+class ReachedClientLimit(Exception):
+    """The tunnel reached the maximum number of simultanous clients connected"""
+
+
+class AuthType(enum.IntEnum):
+    """Helper for authentication tokens"""
+
+    TOTP = 0x01
+    HOTP = 0x02
+
+
+class InternetType(enum.IntEnum):
+    """Helper for IP addresses and identification"""
+
+    IPv4 = 0x01
+    IPv6 = 0x02
+
+    @staticmethod
+    def from_ip(ip: Union[bytes, str]) -> TypeVar("InternetType"):
+        if isinstance(ip, (bytes, str)):
+            ip = ipaddress.ip_address(ip)
+
+        if isinstance(ip, ipaddress.IPv4Address):
+            return InternetType.IPv4
+        if isinstance(ip, ipaddress.IPv6Address):
+            return InternetType.IPv6
+        raise ipaddress.AddressValueError()
+
+
+class ProtocolType(enum.IntEnum):
+    """Helper class for supported protocols"""
+
+    TCP = 0x01
+    HTTP = 0x02
+
+    def __str__(self):
+        return {
+            ProtocolType.TCP: "TCP",
+            ProtocolType.HTTP: "HTTP",
+        }[self.value]
+
+    @staticmethod
+    def from_str(protocol: str) -> TypeVar("ProtocolType"):
+        if protocol.upper() == "TCP":
+            return ProtocolType.TCP
+        if protocol.upper() == "HTTP":
+            return ProtocolType.HTTP
+        raise ValueError("Invalid protocol")
+
+
+config = argparse.Namespace(
+    api=False,
+    api_listen=("::1", DEFAULT_API_PORT),
+    api_ssl=False,
+    api_token=None,
+    authentication=False,
+    auth_hotp=False,
+    auth_timeout=900,
+    auth_token=None,
+    ban_time=60,
+    ca=None,
+    cert=None,
+    cipher=None,
+    crl=None,
+    connect=None,
+    dst=None,
+    http_domain=None,
+    http_listen=("", DEFAULT_HTTP_PORT),
+    http_ssl=False,
+    idle_timeout=0,
+    key=None,
+    listen=("", DEFAULT_PORT),
+    log_file=None,
+    log_level=DEFAULT_LOG_LEVEL,
+    max_clients=0,
+    max_connects=0,
+    max_tunnels=0,
+    mode=None,
+    networks=[],
+    no_curses="TERM" not in os.environ,
+    no_server=False,
+    no_verify_hostname=False,
+    persist_state=None,
+    ping=False,
+    ports=None,
+    protocol=ProtocolType.TCP,
+    tunnel_host=None,
+)
