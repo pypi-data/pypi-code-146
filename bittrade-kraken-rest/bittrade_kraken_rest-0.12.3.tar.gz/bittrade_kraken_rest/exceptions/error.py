@@ -1,0 +1,2 @@
+class KrakenError(Exception):
+    pass
