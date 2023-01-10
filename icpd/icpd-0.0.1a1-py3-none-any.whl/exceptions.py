@@ -1,0 +1,6 @@
+class ICloudLoginRequiredError(Exception):
+    ...
+
+
+class PhotoDownloadError(Exception):
+    ...
