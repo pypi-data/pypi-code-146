@@ -1,0 +1,5 @@
+API = 'api'
+PUSH_PIPELINE = 'push_pipeline'
+START_NEW_RUN = 'start_new_run'
+KILL_RUN = 'kill_run'
+COMPLETE_RUN = 'complete_run'
