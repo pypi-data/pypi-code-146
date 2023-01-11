@@ -1,0 +1,2 @@
+class PricehubbleRequestError(Exception):
+    pass
