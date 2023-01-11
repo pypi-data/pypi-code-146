@@ -1,0 +1,2 @@
+class ParticleSwarmOptimization:
+    pass
