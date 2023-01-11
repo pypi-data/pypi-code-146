@@ -1,0 +1,36 @@
+import os
+from itertools import chain
+from typing import Optional, Set
+
+import docker
+import psutil
+from docker.models.containers import Container
+
+docker_host = os.environ.get("DOCKER_HOST", "unix://var/run/docker.sock")
+docker_client = docker.DockerClient(base_url=docker_host)
+
+
+def get_pids(container: Container) -> Set[int]:
+    return set(map(int, chain.from_iterable(container.top(ps_args="-o pid")["Processes"])))
+
+
+def find_container_by_pid(pid: int) -> Optional[Container]:
+    for container in docker_client.containers.list():
+        if pid in get_pids(container):
+            return container
+    return None
+
+
+def find_user_by_pid(pid: int) -> Optional[str]:
+    try:
+        return psutil.Process(pid).username()
+    except psutil.NoSuchProcess:
+        return None
+
+
+def get_friendly_name_of_process(process):
+    container = find_container_by_pid(process.pid)
+    if container:
+        return container.name
+    else:
+        return process.user if process.user is not None else "Unknown"
