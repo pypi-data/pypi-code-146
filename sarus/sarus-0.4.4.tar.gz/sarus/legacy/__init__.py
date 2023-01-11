@@ -1,0 +1,1 @@
+"""Sarus Legacy package documentation."""
