@@ -1,0 +1,88 @@
+from TheSilent.clear import *
+from ipaddress import *
+
+import socket
+import threading
+import time
+
+cyan = "\033[1;36m"
+
+my_socket = socket.socket()
+my_socket.settimeout(1)
+
+#global variables mainly used for multi-threading
+host_up_list = []
+nmap_list = []
+open_port_list = []
+
+def host_up(port, my_ip):
+    global host_up_list
+
+    try:
+        my_socket.connect((my_ip, port))
+        host_up_list.append(my_ip)
+
+    except ConnectionRefusedError:
+        host_up_list.append(my_ip)
+        
+    except OSError:
+        pas
+
+    except TimeoutError:
+        host_up_list.append(my_ip)
+
+#scan entire network
+def nmap(ip, subnet):
+    global host_up_list
+    global nmap_list
+
+    host_up_list = []
+    nmap_list = []
+    
+    my_list = []
+
+    clear()
+
+    ip_list = list(ip_network(str(ip) + "/" + str(subnet)).hosts())
+
+    for i in ip_list:
+        print(cyan + "scanning: " + str(i))
+
+        my_thread = threading.Thread(target = host_up, args = (80, str(i),))
+        my_thread.start()
+        time.sleep(0.001)
+
+    clear()
+    print(str(len(host_up_list)) + " potential hosts up")
+    
+    for my_ip in host_up_list:
+        print(cyan + "scanning: " + str(my_ip))
+
+        for port in range(1, 1025):
+            my_thread = threading.Thread(target = nmap_thread, args = (str(my_ip), port,))
+            my_thread.start()
+
+        time.sleep(5)
+
+    nmap_list = list(dict.fromkeys(nmap_list))
+    nmap_list.sort()
+
+    clear()
+
+    my_socket.close()
+
+    return nmap_list
+        
+def nmap_thread(my_ip, port):
+    try:
+        my_socket.connect((my_ip, port))
+
+        try:
+            nmap_list.append(my_ip + ": " + str(port))
+            my_socket.close()
+            
+        except:
+            nmap_list.append(my_ip + ": " + str(port))
+
+    except:
+        pass
