@@ -1,0 +1,161 @@
+# internal library
+import aepp
+from aepp import connector
+import logging
+from copy import deepcopy
+
+
+class Sensei:
+    """
+    This module is based on the Sensei Machine Learning API from Adobe Experience Platform.
+    You can find more documentation on the endpoints here : https://www.adobe.io/apis/experienceplatform/home/api-reference.html#/
+    """
+
+    # logging capability
+    loggingEnabled = False
+    logger = None
+
+    def __init__(
+        self,
+        config: dict = aepp.config.config_object,
+        header=aepp.config.header,
+        loggingObject: dict = None,
+        **kwargs,
+    ) -> None:
+        """
+        Initialize the class with the config header used.
+        Arguments:
+            loggingObject : OPTIONAL : logging object to log messages.
+            config : OPTIONAL : config object in the config module.
+            header : OPTIONAL : header object  in the config module.
+        Additional kwargs will update the header.
+        """
+        if loggingObject is not None and sorted(
+            ["level", "stream", "format", "filename", "file"]
+        ) == sorted(list(loggingObject.keys())):
+            self.loggingEnabled = True
+            self.logger = logging.getLogger(f"{__name__}")
+            self.logger.setLevel(loggingObject["level"])
+            formatter = logging.Formatter(loggingObject["format"])
+            if loggingObject["file"]:
+                fileHandler = logging.FileHandler(loggingObject["filename"])
+                fileHandler.setFormatter(formatter)
+                self.logger.addHandler(fileHandler)
+            if loggingObject["stream"]:
+                streamHandler = logging.StreamHandler()
+                streamHandler.setFormatter(formatter)
+                self.logger.addHandler(streamHandler)
+        self.connector = connector.AdobeRequest(
+            config_object=config,
+            header=header,
+            loggingEnabled=self.loggingEnabled,
+            logger=self.logger,
+        )
+        self.header = self.connector.header
+        self.header[
+            "Accept"
+        ] = "application/vnd.adobe.platform.sensei+json;profile=mlInstanceListing.v1.json"
+        self.header.update(**kwargs)
+        self.sandbox = self.connector.config["sandbox"]
+        self.endpoint = (
+            aepp.config.endpoints["global"] + aepp.config.endpoints["sensei"]
+        )
+
+    def getEngines(self, limit: int = 25, **kwargs) -> list:
+        """
+        Return the list of all engines.
+        Arguments:
+            limit : OPTIONAL : number of element per requests
+        kwargs:
+            property : filtering, example value "name==test."
+        """
+        if self.loggingEnabled:
+            self.logger.debug(f"Starting getEngines")
+        path = "/engines"
+        params = {"limit": limit}
+        if kwargs.get("property", False) != False:
+            params["property"] = kwargs.get("property", "")
+        res = self.connector.getData(
+            self.endpoint + path, headers=self.header, params=params
+        )
+        data = res["children"]
+        return data
+
+    def getEngine(self, engineId: str = None) -> dict:
+        """
+        return a specific engine information based on its id.
+        Arguments:
+            engineId : REQUIRED : the engineId to return.
+        """
+        if engineId is None:
+            raise Exception("require an engineId parameter")
+        if self.loggingEnabled:
+            self.logger.debug(f"Starting getEngine")
+        path = f"/engines/{engineId}"
+        res = self.connector.getData(self.endpoint + path, headers=self.header)
+        return res
+
+    def getDockerRegistery(self) -> dict:
+        """
+        Return the docker registery information.
+        """
+        if self.loggingEnabled:
+            self.logger.debug(f"Starting getDockerRegistery")
+        path = "/engines/dockerRegistry"
+        res = self.connector.getData(self.endpoint + path, headers=self.header)
+        return res
+
+    def deleteEngine(self, engineId: str = None) -> str:
+        """
+        Delete an engine based on the id passed.
+        Arguments:
+            engineId : REQUIRED : Engine ID to be deleted.
+        """
+        if engineId is None:
+            raise Exception("require an engineId parameter")
+        if self.loggingEnabled:
+            self.logger.debug(f"Starting deleteEngine")
+        path = f"/engines/{engineId}"
+        res = self.connector.deleteData(self.endpoint + path, headers=self.header)
+        return res
+
+    def getMLinstances(self, limit: int = 25) -> list:
+        """
+        Return a list of all of the ml instance
+        Arguments:
+            limit : OPTIONAL : number of elements retrieved.
+        """
+        if self.loggingEnabled:
+            self.logger.debug(f"Starting getMLinstances")
+        path = "/mlInstances"
+        params = {"limit": limit}
+        res = self.connector.getData(
+            self.endpoint + path, headers=self.header, params=params
+        )
+        data = res["children"]
+        return data
+
+    def createMLinstances(
+        self, name: str = None, engineId: str = None, description: str = None
+    ):
+        """
+        Create a ML instance with the name and instanceId provided.
+        Arguments:
+            name : REQUIRED : name of the ML instance
+            engineId : REQUIRED : engine attached to the ML instance
+            description : OPTIONAL : description of the instance.
+        """
+        if self.loggingEnabled:
+            self.logger.debug(f"Starting createMLinstances")
+        path = "/mlInstances"
+        privateHeader = deepcopy(self.header)
+        privateHeader[
+            "Content"
+        ] = "application/vnd.adobe.platform.sensei+json;profile=mlInstanceListing.v1.json"
+        if name is None and engineId is None:
+            raise Exception("Requires a name and an egineId")
+        body = {"name": name, "engineId": engineId, "description": description}
+        res = self.connector.getData(
+            self.endpoint + path, headers=privateHeader, data=body
+        )
+        return res
