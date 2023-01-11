@@ -1,0 +1,1 @@
+from .cdncheck import lib_path, cdncheck
