@@ -1,0 +1,6 @@
+def encrypt(plaintext: bytes, passphrase: str) -> bytes:
+    ...
+
+
+def decrypt(ciphertext: bytes, passphrase: str) -> bytes:
+    ...
