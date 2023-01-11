@@ -1,0 +1,6 @@
+class ConsistencyError(Exception):
+    ...
+
+
+class ConfigurationError(Exception):
+    ...
