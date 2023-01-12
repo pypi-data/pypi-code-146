@@ -1,0 +1,57 @@
+# -*- coding: utf-8 -*-
+from setuptools import setup
+
+packages = \
+['shaarpec']
+
+package_data = \
+{'': ['*']}
+
+install_requires = \
+['Babel>=2.11.0,<3.0.0',
+ 'anybadge>=1.14.0,<2.0.0',
+ 'anyio>=3.6.2,<4.0.0',
+ 'argon2-cffi-bindings>=21.2.0,<22.0.0',
+ 'argon2-cffi>=21.3.0,<22.0.0',
+ 'asttokens>=2.2.1,<3.0.0',
+ 'attrs>=22.2.0,<23.0.0',
+ 'backcall>=0.2.0,<0.3.0',
+ 'background>=0.2.1,<0.3.0',
+ 'beautifulsoup4>=4.11.1,<5.0.0',
+ 'black>=22.12.0,<23.0.0',
+ 'bleach>=5.0.1,<6.0.0',
+ 'certifi>=2022.12.7,<2023.0.0',
+ 'cffi>=1.15.1,<2.0.0',
+ 'charset-normalizer>=3.0.1,<4.0.0',
+ 'click>=8.1.3,<9.0.0',
+ 'debugpy>=1.6.4,<2.0.0',
+ 'decorator>=5.1.1,<6.0.0',
+ 'defusedxml>=0.7.1,<0.8.0',
+ 'dill>=0.3.6,<0.4.0',
+ 'ecdsa>=0.18.0,<0.19.0',
+ 'entrypoints>=0.4,<0.5',
+ 'executing>=1.2.0,<2.0.0',
+ 'fastjsonschema>=2.16.2,<3.0.0',
+ 'httpx>=0.23.3,<0.24.0',
+ 'oidcish==0.1.3',
+ 'pylint>=2.15.9,<3.0.0',
+ 'tqdm>=4.64.1,<5.0.0']
+
+setup_kwargs = {
+    'name': 'shaarpec',
+    'version': '2.1.0',
+    'description': 'Client for SHAARPEC Analytics API.',
+    'long_description': '\n<!-- PROJECT SHIELDS -->\n<!--\n*** I\'m using markdown "reference style" links for readability.\n*** Reference links are enclosed in brackets [ ] instead of parentheses ( ).\n*** See the bottom of this document for the declaration of the reference variables\n*** for contributors-url, forks-url, etc. This is an optional, concise syntax you may use.\n*** https://www.markdownguide.org/basic-syntax/#reference-style-links\n-->\n[![Contributors][contributors-shield]][contributors-url]\n[![Forks][forks-shield]][forks-url]\n[![Stargazers][stars-shield]][stars-url]\n[![Issues][issues-shield]][issues-url]\n[![MIT License][license-shield]][license-url]\n\n\n<!-- PROJECT LOGO -->\n<br />\n<div align="center">\n  <a href="https://github.com/SHAARPEC/shaarpec-python-client">\n    <img src="images/logo.png" alt="Logo" width="248" height="95">\n  </a>\n\n  <p align="center">\n    Python client for SHAARPEC Analytics API.\n    <br />\n    <a href="https://github.com/SHAARPEC/shaarpec-python-client"><strong>Explore the docs »</strong></a>\n    <br />\n    <br />\n    <a href="https://github.com/SHAARPEC/shaarpec-python-client">View Demo</a>\n    ·\n    <a href="https://github.com/SHAARPEC/shaarpec-python-client/issues">Report Bug</a>\n    ·\n    <a href="https://github.com/SHAARPEC/shaarpec-python-client/issues">Request Feature</a>\n  </p>\n</div>\n\n\n\n<!-- TABLE OF CONTENTS -->\n<details>\n  <summary>Table of Contents</summary>\n  <ol>\n    <li>\n      <a href="#about-the-project">About The Project</a>\n      <ul>\n        <li><a href="#built-with">Built With</a></li>\n      </ul>\n    </li>\n    <li>\n      <a href="#getting-started">Getting Started</a>\n      <ul>\n        <li><a href="#prerequisites">Prerequisites</a></li>\n        <li><a href="#installation">Installation</a></li>\n      </ul>\n    </li>\n    <li><a href="#usage">Usage</a></li>\n    <li><a href="#roadmap">Roadmap</a></li>\n    <li><a href="#license">License</a></li>\n    <li><a href="#contact">Contact</a></li>\n  </ol>\n</details>\n\n\n\n<!-- ABOUT THE PROJECT -->\n## About The Project\n\n[![SHAARPEC API screenshot][product-screenshot]](https://www.shaarpec.com)\n\nThis project is a Python client for convenient access to the SHAARPEC Analytics API, including automated authentication handling via device or code flow.\n\nThe SHAARPEC Analytics API provides calculations on the healthcare organization\'s resources, capacities, clinical outcomes, and much more. These results can be accessed via a standard REST API protected by the SHAARPEC Identity Server.\n\n<p align="right">(<a href="#top">back to top</a>)</p>\n\n### Built With\n\n* [![Httpx][Httpx]][Httpx]\n* [![Python][Python]][Python-url]\n\n<p align="right">(<a href="#top">back to top</a>)</p>\n\n<!-- GETTING STARTED -->\n## Getting Started\n\n### Prerequisites\n\nThe shaarpec client is used as a regular Python library. As always, it is a good idea to install a Python library in an isolated virtual environment.\n\n### Installation\n\n1. Install the library into your virtual environment.\n   ```bash\n   pip install shaarpec\n   ```\n2. Store your credentials to the SHAARPEC IdentityServer in an .env file.\n   ```bash\n   $ cat .env\n   OIDCISH_CLIENT_ID="my client id"\n   OIDCISH_CLIENT_SECRET="my client secret"\n   OIDCISH_AUDIENCE="shaarpec_api.full_access_scope"\n   OIDCISH_SCOPE="openid shaarpec_api.full_access_scope offline_access"\n   ```\n\n<p align="right">(<a href="#top">back to top</a>)</p>\n\n<!-- USAGE EXAMPLES -->\n## Usage\n\nThis library provides a Client class to easily interact with the SHAARPEC Analytics API. The class methods `Client.with_device(...)` and `Client.with_code(...)` class create clients that authenticate with the SHAARPEC IdentityServer with either device (not tied to an individual user, recommended) or code flow (tied to an individual user, for debugging and development).\n\nAll API data is returned as `httpx.Response` objects.\n\nLet\'s look at some code examples on how to get data from the Analytics API. First, import the client class.\n```python\nfrom shaarpec import Client\n```\n\nNext, use [device flow](https://auth0.com/docs/get-started/authentication-and-authorization-flow/device-authorization-flow) or [code flow](https://auth0.com/docs/get-started/authentication-and-authorization-flow/authorization-code-flow) to connect the client to the API with the `Client.with_device` and/or `Client.with_code` class methods.\n\nThe credentials can either be stored in a .env file in the working directory (as explained in the Prerequisites section) or given directly as arguments to the `auth` dict:e\n```python\n# Using a client with device flow.\nclient = Client.with_device(\n        host="https://api.shaarpec.com/",\n        auth={"host": "https://idp.shaarpec.com"}\n    )\n```\nHere `host` is the base URL to the Analytics API and `auth` is a dictionary with the login credentials. With device flow, the user needs to finish the sign-in by visiting a url provided by the IdentityServer. A message will be shown:\n\n> Visit https://idp.shaarpec.com/device?userCode=XXXXXXXXX to complete sign-in.\n\nThe user visits the website, verifies that the user code is correct and confirms the sign-in. After a few seconds, the client will confirm the sign-in:\n\n> SUCCESS: Authentication was successful. Took XX.Y seconds.\n\nThe client is now connected to the API. Visit the Analytics API Base URL to interactively test the endpoints and read their documentation and about their path and query parameters. These parameters are used in the regular (`requests` and `httpx`) way with `client.verb` calls, where `verb` is either `get` or `post`. \n\n### GET and POST\n\nThe `get` and `post` verbs are supported in the standard way. For example (API responses are returned as `httpx.Response` objects):\n```python\nclient.get("terminology/allergy_type").json()\n```\nmight return\n```\n{\'419263009\': \'Allergy to tree pollen\',\n \'420174000\': \'Allergy to wheat\',\n \'425525006\': \'Allergy to dairy product\',\n \'714035009\': \'Allergy to soya\',\n \'419474003\': \'Allergy to mould\',\n \'232347008\': \'Dander (animal) allergy\',\n \'91934008\': \'Allergy to nut\',\n \'417532002\': \'Allergy to fish\',\n \'300913006\': \'Shellfish allergy\',\n \'232350006\': \'House dust mite allergy\',\n \'418689008\': \'Allergy to grass pollen\',\n \'91935009\': \'Allergy to peanuts\',\n \'91930004\': \'Allergy to eggs\',\n \'300916003\': \'Latex allergy\',\n \'424213003\': \'Allergy to bee venom\'}\n```\nor\n```python\nclient.get("population", conditions=["T78.2", "K81.0"])\n```\nmight return\n```\n[{\'patient_origin_id\': \'4c92f494-3c98-f8dd-1473-da9eb0196f6f\',\n    \'age\': \'10-16\',\n    \'is_alive\': True,\n    \'gender\': \'F\',\n    \'deceased_year\': 0},\n ...\n]\n```\n\n### Running tasks\n\nSHAARPEC Analytics API supports long-running tasks by `POST`:ing to `/service/path/to/endpoint`, and then polling with `GET` to `/service/tasks/{task_id}/status` until the result becomes available at `/service/tasks/{task_id}/results`. There is a `run` function in the library that performs this pattern.\n\nFor example\n\n```python\ntask = client.run("population/conditions")\n```\n\nwill return a task with the comorbidities in the entire population. A task is a Pydantic model with the following properties:\n\n```python\nclass Task(BaseModel):\n    """A running task."""\n    service: str\n    task_id: str\n    submitted_at: str\n    status: str\n    success: Optional[bool]\n    progress: Optional[float]\n    result: Optional[Any]\n    error: Optional[Any]\n    debugger: Optional[Any]\n```\nAs you can see, the success, progress, result and error are optional and updated automatically when available. The method comes with a progress bar for jupyter which can be disabled via `client.run("path/to/task", progress_bar=False)`. If you want to use the task result in a subsequent command, you can easily wait (blocking) for the result with the `task.wait_for_result()` method:\n\n```python\ntask = client.run("path/to/task")\nprint(f"The result is: {task.wait_for_result()}!")\n```\n\n\n\n<p align="right">(<a href="#top">back to top</a>)</p>\n\n<!-- ROADMAP -->\n## Roadmap\n\nSee the [open issues](https://github.com/SHAARPEC/shaarpec-python-client/issues) for a full list of proposed features (and known issues).\n\n<p align="right">(<a href="#top">back to top</a>)</p>\n\n\n<!-- LICENSE -->\n## License\n\nDistributed under the MIT License. See `LICENSE` for more information.\n\n<p align="right">(<a href="#top">back to top</a>)</p>\n\n\n<!-- CONTACT -->\n## Contact\n\nSHAARPEC Support - support@shaarpec.com\n\nProject Link: [https://github.com/SHAARPEC/shaarpec-python-client](https://github.com/SHAARPEC/shaarpec-python-client)\n\n<p align="right">(<a href="#top">back to top</a>)</p>\n\n\n<!-- MARKDOWN LINKS & IMAGES -->\n<!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->\n[contributors-shield]: https://img.shields.io/github/contributors/SHAARPEC/shaarpec-python-client.svg?style=for-the-badge\n[contributors-url]: https://github.com/SHAARPEC/shaarpec-python-client/graphs/contributors\n[forks-shield]: https://img.shields.io/github/forks/SHAARPEC/shaarpec-python-client.svg?style=for-the-badge\n[forks-url]: https://github.com/SHAARPEC/shaarpec-python-client/network/members\n[stars-shield]: https://img.shields.io/github/stars/SHAARPEC/shaarpec-python-client.svg?style=for-the-badge\n[stars-url]: https://github.com/SHAARPEC/shaarpec-python-client/stargazers\n[issues-shield]: https://img.shields.io/github/issues/SHAARPEC/shaarpec-python-client.svg?style=for-the-badge\n[issues-url]: https://github.com/SHAARPEC/shaarpec-python-client/issues\n[license-shield]: https://img.shields.io/github/license/SHAARPEC/shaarpec-python-client?style=for-the-badge\n[license-url]: https://github.com/SHAARPEC/shaarpec-python-client/blob/master/LICENSE\n[product-screenshot]: images/screenshot.png\n[Httpx]: images/httpx.svg\n[Httpx-url]: https://www.python-httpx.org/\n[Python]: images/python-3.8.svg\n[Python-url]: https://www.python.org/\n',
+    'author': 'Erik G. Brandt',
+    'author_email': 'erik.brandt@shaarpec.com',
+    'maintainer': 'None',
+    'maintainer_email': 'None',
+    'url': 'None',
+    'packages': packages,
+    'package_data': package_data,
+    'install_requires': install_requires,
+    'python_requires': '>=3.10,<4.0',
+}
+
+
+setup(**setup_kwargs)
