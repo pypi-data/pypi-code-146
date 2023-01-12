@@ -1,0 +1,55 @@
+# Copyright 2021 Sony Group Corporation.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+import nnabla.functions as F
+from .utils import no_grad
+
+
+def bool_scatter_backward(grad_inputs, inputs, input_shapes, outputs, output_shapes):
+    """
+    Args:
+      grad_inputs (list of :obj:`nnabla.Variable`): Propagated grads to this backward function.
+      inputs (list of :obj:`nnabla.Variable` and None): Input Variables of the forward function
+          if this backward function depends on it. Otherwise, None is set instead.
+      input_shapes (list of tuple of :obj:`int`): Input shapes of the forward function.
+          The shapes of the inputs in which None is set can be passed.
+      outputs (list of :obj:`nnabla.Variable` and None): Output Variables of the forward function
+          if this backward function depends on it. Otherwise, None is set instead.
+      output_shapes (list of tuple of :obj:`int`): Output shapes of the forward function.
+          The shapes of the outputs in which None is set can be passed.
+      kwargs (dict of arguments): Dictionary of the corresponding function arguments.
+
+    Return:
+      list of Variable: Return the gradients wrt inputs of the corresponding function.
+    """
+    # In auto-forward mode, the dynamic clear of inputs[1] is blocked by
+    # BoolScatter::auto_grad_depends_input_data.
+    dy = grad_inputs[0]
+    x0 = inputs[0]
+    m0 = inputs[1]
+    o0 = inputs[2] if len(inputs) == 3 else None
+
+    dx = F.bool_gather(dy, m0)
+    dm = None
+
+    if len(inputs) == 3:
+        m1 = F.equal_scalar(m0, 0)
+        m1 = F.reshape(m1, m1.shape + (1, ) * (dy.ndim - m1.ndim))
+        m1 = F.broadcast(m1, dy.shape)
+        m1 = no_grad(m1)
+        do = dy * m1
+        return dx, dm, do
+    else:
+        return dx, dm
