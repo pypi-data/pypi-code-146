@@ -1,0 +1,47 @@
+#
+# This is an auto-generated file.  DO NOT EDIT!
+#
+
+from ansys.fluent.core.solver.flobject import *
+
+from ansys.fluent.core.solver.flobject import _ChildNamedObjectAccessorMixin
+
+from ansys.fluent.core.solver.flobject import _CreatableNamedObjectMixin
+
+from ansys.fluent.core.solver.flobject import _NonCreatableNamedObjectMixin
+
+from .field import field
+from .options_8 import options
+from .enabled_2 import enabled
+from .filter_minimum import filter_minimum
+from .filter_maximum import filter_maximum
+class filter_settings(Group):
+    """
+    'filter_settings' child.
+    """
+
+    fluent_name = "filter-settings"
+
+    child_names = \
+        ['field', 'options', 'enabled', 'filter_minimum', 'filter_maximum']
+
+    field: field = field
+    """
+    field child of filter_settings.
+    """
+    options: options = options
+    """
+    options child of filter_settings.
+    """
+    enabled: enabled = enabled
+    """
+    enabled child of filter_settings.
+    """
+    filter_minimum: filter_minimum = filter_minimum
+    """
+    filter_minimum child of filter_settings.
+    """
+    filter_maximum: filter_maximum = filter_maximum
+    """
+    filter_maximum child of filter_settings.
+    """
