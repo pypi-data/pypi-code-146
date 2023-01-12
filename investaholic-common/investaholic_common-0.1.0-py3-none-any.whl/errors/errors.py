@@ -1,0 +1,2 @@
+class AssociationError(BaseException):
+    pass
