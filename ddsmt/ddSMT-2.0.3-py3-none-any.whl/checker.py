@@ -1,0 +1,213 @@
+#
+# ddSMT: A delta debugger for SMT benchmarks in SMT-Lib v2 format.
+#
+# This file is part of ddSMT.
+#
+# Copyright (C) 2013-2021 by the authors listed in AUTHORS file.
+#
+# ddSMT is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# ddSMT is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with ddSMT.  If not, see <https://www.gnu.org/licenses/>.
+
+import collections
+import logging
+import math
+import resource
+import subprocess
+import sys
+import time
+
+from . import nodeio
+from . import options
+from . import tmpfiles
+
+RunInfo = collections.namedtuple("RunInfo", ["exit", "out", "err", "runtime"])
+
+__GOLDEN = None
+__GOLDEN_CC = None
+
+
+def limit_resources(timeout, pid=None):
+    """Apply resource limit given by ``--memout`` and timeout arguments."""
+    if pid:
+        setlimit = lambda *args: resource.prlimit(pid, *args)  # noqa: E731
+    else:
+        setlimit = lambda *args: resource.setrlimit(*args)  # noqa: E731
+
+    if options.args().memout:
+        setlimit(resource.RLIMIT_AS,
+                 (options.args().memout * 1024 * 1024, resource.RLIM_INFINITY))
+    if timeout:
+        timeout = math.ceil(timeout)
+        setlimit(resource.RLIMIT_CPU, (timeout, timeout))
+
+
+def execute(cmd, filename, timeout):
+    """Execute the command on the file with a timeout and a memory limit."""
+    if options.args().unchecked:
+        return RunInfo(0, "unchecked", "unchecked", 0)
+    start = time.time()
+    if hasattr(resource, 'prlimit'):
+        proc = subprocess.Popen(cmd + [filename],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE)
+        limit_resources(timeout, proc.pid)
+    else:
+        proc = subprocess.Popen(cmd + [filename],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                preexec_fn=lambda: limit_resources(timeout))
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        runtime = time.time() - start
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        logging.debug(f'[!!] timeout: terminated after {timeout:.2f} seconds')
+        return RunInfo(proc.returncode, None, None, timeout)
+    return RunInfo(proc.returncode, out.decode(), err.decode(), runtime)
+
+
+def matches_golden(golden, run, ignore_out, ignore_err, match_out, match_err):
+    """Checks whether the ``run`` result matches the golden run, considering
+    ``ignore_out``, ``ignore_err``, ``match_out`` and ``match_err``.
+
+    If ``ignore_out`` and ``ignore_err`` are true, only the exit code is
+    compared. Else, if ``ignore_out`` is true, only stderr is considered, and
+    if ``ignore_err`` is true, only stdout is considere. If either
+    ``match_out`` or ``match_err`` are given, they need to match. Otherwise,
+    both stdout and stderr must be the same.
+    """
+    if run.exit != golden.exit:
+        return False
+
+    if not ignore_out or not ignore_err:
+        if not ignore_out:
+            if match_out:
+                if match_out not in run.out:
+                    return False
+            else:
+                if golden.out != run.out:
+                    return False;
+        if not ignore_err:
+            if match_err:
+                if match_err not in run.err:
+                    return False
+            else:
+                if golden.err != run.err:
+                    return False;
+    return True
+
+
+def check(filename):
+    """Check whether the given file behaves as the original input.
+
+    First execute the command and then call ``matches_golden``. If a
+    cross-check command is specified, do the same for that one as well.
+    """
+    ri = execute(options.args().cmd, filename, options.args().timeout)
+    if not matches_golden(
+            __GOLDEN,
+            ri,
+            options.args().ignore_output or options.args().ignore_out,
+            options.args().ignore_output or options.args().ignore_err,
+            options.args().match_out,
+            options.args().match_err):
+        return False
+
+    if options.args().cmd_cc:
+        ri = execute(options.args().cmd_cc, filename,
+                     options.args().timeout_cc)
+        if not matches_golden(__GOLDEN_CC, ri,
+                              options.args().ignore_output_cc,
+                              options.args().ignore_output_cc,
+                              options.args().match_out_cc,
+                              options.args().match_err_cc):
+            return False
+
+    return True
+
+
+def check_exprs(exprs):
+    """Run the check on the given expressions.
+
+    Returns (True,runtime) if the check was successful and (False,0)
+    otherwise.
+    """
+    tmpfile = tmpfiles.get_tmp_filename()
+    nodeio.write_smtlib_for_checking(tmpfile, exprs)
+    return check(tmpfile)
+
+
+def do_golden_runs():
+    """Do the initial runs to obtain the golden run results."""
+    global __GOLDEN
+    global __GOLDEN_CC
+
+    logging.info('')
+    if options.args().cmd_cc:
+        logging.info('starting initial run, cross checking...')
+    else:
+        logging.info('starting initial run...')
+    logging.info('')
+
+    __GOLDEN = execute(options.args().cmd,
+                       options.args().infile,
+                       options.args().timeout)
+
+    logging.info(f'golden exit: {__GOLDEN.exit}')
+    logging.info(f'golden err:\n{__GOLDEN.err}')
+    logging.info(f'golden out:\n{__GOLDEN.out}')
+    logging.info(f'golden runtime: {__GOLDEN.runtime:.2f} seconds')
+    if options.args().ignore_output or options.args().ignore_out:
+        logging.info(f'ignoring stdout')
+    if options.args().ignore_output or options.args().ignore_err:
+        logging.info(f'ignoring stderr')
+    if options.args().match_out:
+        logging.info(f'match (stdout): "{options.args().match_out}"')
+        if options.args().match_out not in __GOLDEN.out:
+            logging.error(
+                f'Expected stdout to match "{options.args().match_out}"')
+            sys.exit(1)
+    if options.args().match_err:
+        logging.info(f'match (stderr): "{options.args().match_err}"')
+        if options.args().match_err not in __GOLDEN.err:
+            logging.error(
+                f'Expected stderr to match "{options.args().match_err}"')
+            sys.exit(1)
+
+    if options.args().timeout is None:
+        options.args().timeout = round((__GOLDEN.runtime + 1) * 1.5, 2)
+        logging.info(
+            f'automatic timeout: {options.args().timeout:.2f} seconds')
+
+    if options.args().cmd_cc:
+        __GOLDEN_CC = execute(options.args().cmd_cc,
+                              options.args().infile,
+                              options.args().timeout_cc)
+
+        logging.info("")
+        logging.info(f'golden exit (cc): {__GOLDEN_CC.exit}')
+        logging.info(f'golden err (cc):\n{__GOLDEN_CC.err}')
+        logging.info(f'golden out (cc):\n{__GOLDEN_CC.out}')
+        logging.info(f'golden runtime (cc): {__GOLDEN_CC.runtime:.2f} s')
+        if options.args().match_out_cc:
+            logging.info(
+                f'match (cc) (stdout): "{options.args().match_out_cc}"')
+        if options.args().match_err_cc:
+            logging.info(
+                f'match (cc) (stderr): "{options.args().match_err_cc}"')
+
+        if options.args().timeout_cc is None:
+            options.args().timeout_cc = round((__GOLDEN_CC.runtime + 1) * 1.5,
+                                              2)
+            logging.info(
+                f'automatic timeout (cc): {options.args().timeout_cc:.2f} s')
