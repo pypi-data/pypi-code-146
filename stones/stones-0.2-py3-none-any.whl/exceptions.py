@@ -1,0 +1,3 @@
+
+class EncoderException(Exception):
+    pass
