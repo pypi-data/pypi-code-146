@@ -1,0 +1,463 @@
+from typing import Any, Collection, Dict, List, Mapping, Optional
+
+import boto3
+from dagster import (
+    Array,
+    Enum,
+    EnumValue,
+    Field,
+    IntSource,
+    Noneable,
+    ScalarUnion,
+    StringSource,
+    _check as check,
+)
+from dagster._core.launcher import RunLauncher
+from dagster._serdes import ConfigurableClass, ConfigurableClassData
+from dagster._utils.merger import merge_dicts
+from dagster_aws.ecs.container_context import EcsContainerContext
+from dagster_aws.secretsmanager import get_secrets_from_arns
+from dagster_cloud_cli.core.workspace import CodeDeploymentMetadata
+
+from dagster_cloud.workspace.config_schema import SHARED_ECS_CONFIG
+from dagster_cloud.workspace.ecs.client import DEFAULT_ECS_GRACE_PERIOD, DEFAULT_ECS_TIMEOUT, Client
+from dagster_cloud.workspace.ecs.service import Service
+from dagster_cloud.workspace.ecs.utils import get_ecs_human_readable_label, unique_ecs_resource_name
+from dagster_cloud.workspace.user_code_launcher import (
+    DEFAULT_SERVER_PROCESS_STARTUP_TIMEOUT,
+    SHARED_USER_CODE_LAUNCHER_CONFIG,
+    DagsterCloudGrpcServer,
+    DagsterCloudUserCodeLauncher,
+    ServerEndpoint,
+)
+from dagster_cloud.workspace.user_code_launcher.utils import deterministic_label_for_location
+
+from .run_launcher import CloudEcsRunLauncher
+from .utils import get_task_definition_family
+
+EcsServerHandleType = Service
+
+CONTAINER_NAME = "dagster"
+PORT = 4000
+
+
+class EcsUserCodeLauncher(DagsterCloudUserCodeLauncher[EcsServerHandleType], ConfigurableClass):
+    def __init__(
+        self,
+        cluster: str,
+        subnets: List[str],
+        execution_role_arn: str,
+        log_group: str,
+        service_discovery_namespace_id: str,
+        task_role_arn: Optional[str] = None,
+        security_group_ids: Optional[List[str]] = None,
+        inst_data: Optional[ConfigurableClassData] = None,
+        secrets=None,
+        secrets_tag=None,
+        env_vars=None,
+        ecs_timeout=None,
+        ecs_grace_period=None,
+        launch_type: Optional[str] = None,
+        server_resources: Optional[Mapping[str, str]] = None,
+        run_resources: Optional[Mapping[str, str]] = None,
+        **kwargs,
+    ):
+        self.ecs = boto3.client("ecs")
+        self.logs = boto3.client("logs")
+        self.service_discovery = boto3.client("servicediscovery")
+        self.secrets_manager = boto3.client("secretsmanager")
+
+        self.cluster = cluster
+        self.subnets = subnets
+        self.security_group_ids = security_group_ids
+        self.service_discovery_namespace_id = service_discovery_namespace_id
+        self.execution_role_arn = execution_role_arn
+        self.task_role_arn = task_role_arn
+        self.log_group = log_group
+        self._inst_data = check.opt_inst_param(inst_data, "inst_data", ConfigurableClassData)
+        self.secrets = check.opt_list_param(secrets, "secrets")
+        self.env_vars = check.opt_list_param(env_vars, "env_vars")
+
+        if all(isinstance(secret, str) for secret in self.secrets):
+            self.secrets = [
+                {"name": name, "valueFrom": value_from}
+                for name, value_from in get_secrets_from_arns(
+                    self.secrets_manager, self.secrets
+                ).items()
+            ]
+
+        self.secrets_tag = secrets_tag
+
+        self._ecs_timeout = check.opt_int_param(
+            ecs_timeout,
+            "ecs_timeout",
+            DEFAULT_ECS_TIMEOUT,
+        )
+
+        self._ecs_grace_period = check.opt_int_param(
+            ecs_grace_period,
+            "ecs_grace_period",
+            DEFAULT_ECS_GRACE_PERIOD,
+        )
+
+        self.launch_type = check.opt_str_param(launch_type, "launch_type", default="FARGATE")
+
+        self.server_resources = check.opt_mapping_param(server_resources, "server_resources")
+        self.run_resources = check.opt_mapping_param(run_resources, "run_resources")
+
+        self.client = Client(
+            cluster_name=self.cluster,
+            subnet_ids=self.subnets,
+            security_group_ids=security_group_ids,
+            service_discovery_namespace_id=self.service_discovery_namespace_id,
+            log_group=self.log_group,
+            execution_role_arn=self.execution_role_arn,
+            timeout=self._ecs_timeout,
+            grace_period=self._ecs_grace_period,
+            launch_type=self.launch_type,
+        )
+        super(EcsUserCodeLauncher, self).__init__(**kwargs)
+
+    @property
+    def requires_images(self):
+        return True
+
+    @classmethod
+    def config_type(cls):
+        return merge_dicts(
+            {
+                "cluster": Field(StringSource),
+                "subnets": Field(Array(StringSource)),
+                "security_group_ids": Field(Array(StringSource), is_required=False),
+                "execution_role_arn": Field(StringSource),
+                "task_role_arn": Field(StringSource, is_required=False),
+                "log_group": Field(StringSource),
+                "service_discovery_namespace_id": Field(StringSource),
+                "secrets": Field(
+                    Array(
+                        ScalarUnion(
+                            scalar_type=str,
+                            non_scalar_schema={"name": StringSource, "valueFrom": StringSource},
+                        )
+                    ),
+                    is_required=False,
+                    description=(
+                        "An array of AWS Secrets Manager secrets. These secrets will "
+                        "be mounted as environment variabls in the container. See "
+                        "https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_Secret.html."
+                    ),
+                ),
+                "secrets_tag": Field(
+                    Noneable(StringSource),
+                    is_required=False,
+                    description=(
+                        "AWS Secrets Manager secrets with this tag will be mounted as "
+                        "environment variables in the container."
+                    ),
+                ),
+                "env_vars": Field(
+                    [StringSource],
+                    is_required=False,
+                    description=(
+                        "List of environment variable names to include in the ECS task. Each can be"
+                        " of the form KEY=VALUE or just KEY (in which case the value will be pulled"
+                        " from the current process)"
+                    ),
+                ),
+                "server_process_startup_timeout": Field(
+                    IntSource,
+                    is_required=False,
+                    default_value=DEFAULT_SERVER_PROCESS_STARTUP_TIMEOUT,
+                    description=(
+                        "Timeout when waiting for a code server to be ready after it is created"
+                    ),
+                ),
+                "ecs_timeout": Field(
+                    IntSource,
+                    is_required=False,
+                    default_value=DEFAULT_ECS_TIMEOUT,
+                    description="How long (in seconds) to poll against ECS API endpoints",
+                ),
+                "ecs_grace_period": Field(
+                    IntSource,
+                    is_required=False,
+                    default_value=DEFAULT_ECS_GRACE_PERIOD,
+                    description=(
+                        "How long (in seconds) to continue polling if an ECS API endpoint fails "
+                        "(because the ECS API is eventually consistent)"
+                    ),
+                ),
+                "launch_type": Field(
+                    Enum(
+                        "EcsLaunchType",
+                        [
+                            EnumValue("FARGATE"),
+                            EnumValue("EC2"),
+                        ],
+                    ),
+                    is_required=False,
+                    default_value="FARGATE",
+                    description=(
+                        "What type of ECS infrastructure to launch the run task in. "
+                        "See https://docs.aws.amazon.com/AmazonECS/latest/developerguide/launch_types.html"
+                    ),
+                ),
+            },
+            SHARED_ECS_CONFIG,
+            SHARED_USER_CODE_LAUNCHER_CONFIG,
+        )
+
+    @staticmethod
+    def from_config_value(inst_data: ConfigurableClassData, config_value: Dict[str, Any]):  # type: ignore
+        return EcsUserCodeLauncher(inst_data=inst_data, **config_value)
+
+    @property
+    def inst_data(self) -> Optional[ConfigurableClassData]:
+        return self._inst_data
+
+    def _get_grpc_server_sidecars(self) -> Optional[List[Dict[str, Any]]]:
+        return None
+
+    def _get_service_cpu_override(self, container_context: EcsContainerContext) -> Optional[str]:
+        return container_context.server_resources.get("cpu")
+
+    def _get_service_memory_override(self, container_context: EcsContainerContext) -> Optional[str]:
+        return container_context.server_resources.get("memory")
+
+    def _get_enable_ecs_exec(self) -> bool:
+        return False
+
+    def _get_additional_grpc_server_env(self) -> Dict[str, str]:
+        return {}
+
+    def _start_new_server_spinup(
+        self, deployment_name: str, location_name: str, metadata: CodeDeploymentMetadata
+    ) -> DagsterCloudGrpcServer:
+        if metadata.pex_metadata:
+            command = metadata.get_multipex_server_command(PORT)
+            additional_env = metadata.get_multipex_server_env()
+            tags = {"dagster/multipex_server": "1"}
+        else:
+            command = metadata.get_grpc_server_command()
+            additional_env = metadata.get_grpc_server_env(
+                PORT, location_name, self._instance.ref_for_deployment(deployment_name)
+            )
+            tags = {"dagster/grpc_server": "1"}
+
+        container_context = EcsContainerContext(
+            secrets=self.secrets,
+            secrets_tags=[self.secrets_tag] if self.secrets_tag else [],
+            env_vars=self.env_vars
+            + [f"{k}={v}" for k, v in (metadata.cloud_context_env or {}).items()],
+            server_resources=self.server_resources,
+            run_resources=self.run_resources,
+        ).merge(EcsContainerContext.create_from_config(metadata.container_context))
+
+        environment = merge_dicts(
+            container_context.get_environment_dict(),
+            additional_env,
+            self._get_additional_grpc_server_env(),
+        )
+
+        self._logger.info(
+            "Creating a new service for {}:{}...".format(deployment_name, location_name)
+        )
+
+        family = get_task_definition_family(
+            "server", self._instance.organization_name, deployment_name, location_name
+        )
+
+        service = self.client.create_service(
+            name=unique_ecs_resource_name(deployment_name, location_name),
+            family=family,
+            image=metadata.image,
+            container_name=CONTAINER_NAME,
+            command=command,
+            env=environment,
+            tags={
+                "dagster/deployment_name": get_ecs_human_readable_label(deployment_name),
+                "dagster/location_name": get_ecs_human_readable_label(
+                    location_name,
+                ),
+                "dagster/location_hash": deterministic_label_for_location(
+                    deployment_name, location_name
+                ),
+                **tags,
+            },
+            task_role_arn=self.task_role_arn,
+            secrets=container_context.get_secrets_dict(self.secrets_manager),
+            sidecars=self._get_grpc_server_sidecars(),
+            logger=self._logger,
+            cpu=self._get_service_cpu_override(container_context),
+            memory=self._get_service_memory_override(container_context),
+            allow_ecs_exec=self._get_enable_ecs_exec(),
+        )
+        self._logger.info(
+            "Created a new service at hostname {} for {}:{}, waiting for server to be ready..."
+            .format(service.hostname, deployment_name, location_name)
+        )
+
+        endpoint = ServerEndpoint(
+            host=service.hostname,
+            port=PORT,
+            socket=None,
+        )
+
+        return DagsterCloudGrpcServer(service, endpoint, metadata)
+
+    def _check_running_multipex_server(self, multipex_server: DagsterCloudGrpcServer):
+        self._logger.info(
+            f"Checking for service {multipex_server.server_handle.name} is ready for existing"
+            " multipex server..."
+        )
+        self.client.wait_for_service(
+            multipex_server.server_handle, container_name=CONTAINER_NAME, logger=self._logger
+        )
+        super()._check_running_multipex_server(multipex_server)
+
+    def _wait_for_new_multipex_server(
+        self,
+        _deployment_name: str,
+        _location_name: str,
+        server_handle: Service,
+        multipex_endpoint: ServerEndpoint,
+    ):
+        self._logger.info(
+            f"Waiting for service {server_handle.name} to be ready for multipex server..."
+        )
+        task_arn = self.client.wait_for_service(
+            server_handle, container_name=CONTAINER_NAME, logger=self._logger
+        )
+        self._wait_for_server_process(
+            multipex_endpoint.create_multipex_client(),
+            timeout=self._server_process_startup_timeout,
+            additional_check=lambda: self.client.assert_task_not_stopped(
+                task_arn, CONTAINER_NAME, self._logger
+            ),
+        )
+
+    def _wait_for_new_server_ready(
+        self,
+        _deployment_name: str,
+        _location_name: str,
+        _metadata: CodeDeploymentMetadata,
+        server_handle: Service,
+        server_endpoint: ServerEndpoint,
+    ) -> None:
+        self._logger.info(
+            f"Waiting for service {server_handle.name} to be ready for gRPC server..."
+        )
+        task_arn = self.client.wait_for_service(
+            server_handle, container_name=CONTAINER_NAME, logger=self._logger
+        )
+        self._wait_for_dagster_server_process(
+            client=server_endpoint.create_client(),
+            timeout=self._server_process_startup_timeout,
+            additional_check=lambda: self.client.assert_task_not_stopped(
+                task_arn, CONTAINER_NAME, self._logger
+            ),
+        )
+
+    def _remove_server_handle(self, server_handle: EcsServerHandleType) -> None:
+        self._logger.info(
+            "Deleting service {} at hostname {}...".format(
+                server_handle.name, server_handle.hostname
+            )
+        )
+        self.client.delete_service(server_handle)
+        self._logger.info(
+            "Deleted service {} at hostname {}.".format(server_handle.name, server_handle.hostname)
+        )
+
+    def _get_multipex_server_handles_for_location(
+        self, deployment_name, location_name: str
+    ) -> Collection[EcsServerHandleType]:
+        tags = {
+            "dagster/location_hash": deterministic_label_for_location(
+                deployment_name, location_name
+            ),
+            "dagster/multipex_server": "1",
+        }
+        services = self.client.list_services()
+        location_services = [
+            service for service in services if tags.items() <= service.tags.items()
+        ]
+        return location_services
+
+    def _get_standalone_dagster_server_handles_for_location(
+        self, deployment_name, location_name: str
+    ) -> Collection[EcsServerHandleType]:
+        tags = {
+            "dagster/location_hash": deterministic_label_for_location(
+                deployment_name, location_name
+            ),
+            "dagster/grpc_server": "1",
+        }
+        services = self.client.list_services()
+        location_services = [
+            service for service in services if tags.items() <= service.tags.items()
+        ]
+        return location_services
+
+    def _cleanup_servers(self):
+        for service in self.client.list_services():
+            if "dagster/location_name" in service.tags.keys():
+                self._remove_server_handle(service)
+        self._logger.info("Finished cleaning up servers.")
+
+    def _run_launcher_kwargs(self) -> Dict[str, Any]:
+        sidecars = self._get_grpc_server_sidecars()
+
+        return dict(
+            task_definition={
+                "log_group": self.log_group,
+                "execution_role_arn": self.execution_role_arn,
+                "requires_compatibilities": [self.launch_type],
+                **({"task_role_arn": self.task_role_arn} if self.task_role_arn else {}),
+                **({"sidecars": sidecars} if sidecars else {}),
+            },
+            secrets=self.secrets,
+            secrets_tag=self.secrets_tag,
+            env_vars=self.env_vars,
+            use_current_ecs_task_config=False,
+            run_task_kwargs={
+                "cluster": self.cluster,
+                "networkConfiguration": self.client.network_configuration,
+                "launchType": self.launch_type,
+            },
+            container_name=CONTAINER_NAME,
+            run_resources=self.run_resources,
+        )
+
+    def run_launcher(self) -> RunLauncher:
+        launcher = CloudEcsRunLauncher(**self._run_launcher_kwargs())
+        launcher.register_instance(self._instance)
+
+        return launcher
+
+    def _get_logs(self, task_arn: str) -> List[str]:
+        task_id = task_arn.split("/")[-1]
+
+        task = self.ecs.describe_tasks(
+            cluster=self.cluster,
+            tasks=[task_arn],
+        ).get(
+            "tasks"
+        )[0]
+        task_definition = self.ecs.describe_task_definition(
+            taskDefinition=task.get("taskDefinitionArn"),
+        ).get("taskDefinition")
+        container = task_definition.get("containerDefinitions")[0]
+        container_name = container.get("name")
+        log_stream_prefix = (
+            container.get("logConfiguration", {}).get("options", {}).get("awslogs-stream-prefix")
+        )
+
+        log_stream = f"{log_stream_prefix}/{container_name}/{task_id}"
+
+        events = self.logs.get_log_events(
+            logGroupName=self.log_group,
+            logStreamName=log_stream,
+        ).get("events")
+
+        return [event.get("message") for event in events]
