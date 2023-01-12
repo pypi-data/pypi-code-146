@@ -1,0 +1,2 @@
+class KepingApiException(Exception):
+    pass
