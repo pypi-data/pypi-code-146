@@ -1,0 +1,7 @@
+
+access_token = '24.f34a620f6b880e4bf0fa71f1f2a0e36b.2592000.1654596974.282335-24898682'
+db_path = r".\database\login.db"
+OCR_PIC_SIZE_THRESHOLD = 3.75*1024*1024
+rsa_key = "rongda518"
+ALGORITHM = "HS256"
+SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
