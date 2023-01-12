@@ -1,0 +1,1 @@
+from mkdocs_iolanta.graph_provider import MkDocsIolantaGraphProvider
