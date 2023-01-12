@@ -1,0 +1,1 @@
+from .ayiin import AyiinMethod
