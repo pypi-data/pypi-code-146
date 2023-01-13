@@ -1,0 +1,59 @@
+import django_tables2 as tables
+
+from netbox.tables import (
+    NetBoxTable,
+    ToggleColumn,
+    ActionsColumn,
+)
+
+from netbox_disk.models import Drive
+
+
+class DriveBaseTable(NetBoxTable):
+    """Base class for tables displaying Disks"""
+
+    size = tables.Column(
+        linkify=True
+    )
+    cluster = tables.Column(
+        linkify=True
+    )
+
+
+class DriveTable(DriveBaseTable):
+    """Table for displaying Disk objects."""
+
+    pk = ToggleColumn()
+    virtual_machine = tables.Column(
+        linkify=True
+    )
+
+    class Meta(NetBoxTable.Meta):
+        model = Drive
+        fields = (
+            "pk",
+            "size",
+            "cluster",
+            "virtual_machine",
+            "description",
+        )
+        default_columns = (
+            "virtual_machine",
+            "size",
+            "cluster",
+        )
+
+
+class RelatedDriveTable(DriveBaseTable):
+    actions = ActionsColumn(actions=())
+
+    class Meta(NetBoxTable.Meta):
+        model = Drive
+        fields = (
+            "size",
+            "cluster",
+        )
+        default_columns = (
+            "size",
+            "cluster",
+        )
