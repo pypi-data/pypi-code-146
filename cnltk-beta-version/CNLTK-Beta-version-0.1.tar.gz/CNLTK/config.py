@@ -1,0 +1,5 @@
+pos_h5_filepath = 'models/POS_TAG_WORD(1).h5'
+postags_pkl_filepath = 'models/tagindex_model.pkl'
+postagsindex_pkl_filepath = 'models/tagindex_model.pkl'
+vocabs_pkl_filepath = 'models/vocab_model2.pkl'
+corpus_csv_filepath = 'Datasets/annotatedtestxt.csv'
