@@ -1,0 +1,555 @@
+#!/usr/bin/env python
+
+#############################################################################
+##
+# This file is part of Taurus
+##
+# http://taurus-scada.org
+##
+# Copyright 2011 CELLS / ALBA Synchrotron, Bellaterra, Spain
+##
+# Taurus is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+##
+# Taurus is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+##
+# You should have received a copy of the GNU Lesser General Public License
+# along with Taurus.  If not, see <http://www.gnu.org/licenses/>.
+##
+#############################################################################
+__all__ = ["TaurusTrendSet", "TrendCurve"]
+
+"""This provides the pyqtgraph implementation of :class:`TaurusTrendSet`"""
+
+import copy
+import numpy
+from taurus.core import TaurusEventType, TaurusTimeVal
+from taurus.qt.qtgui.base import TaurusBaseComponent
+from taurus.core.util.containers import ArrayBuffer, LoopList
+from taurus.external.qt import Qt
+from pyqtgraph import PlotDataItem
+
+from .forcedreadtool import ForcedReadTool
+from .curveproperties import CURVE_COLORS
+from .util import ensure_unique_curve_name
+
+import taurus
+
+
+class TrendCurve(PlotDataItem):
+    """A PlotDataItem for representing 1D trends"""
+    def __repr__(self):
+        return "<TrendCurve {}>".format(self.name())
+
+
+class TaurusTrendSet(PlotDataItem, TaurusBaseComponent):
+    """
+    A PlotDataItem for displaying trend curve(s) associated to a
+    TaurusAttribute. The TaurusTrendSet itself does not contain any data,
+    but acts as a manager that dynamically adds/removes curve(s) (other
+    PlotDataItems) to its associated plot.
+
+    If the attribute is a scalar, the Trend Set generates only one curve
+    representing the evolution of the value of the attribute. If the attribute
+    is an array, as many curves as the attribute size are created,
+    each representing the evolution of the value of a component of the array.
+
+    When an event is received, all curves belonging to a TaurusTrendSet
+    are updated.
+
+    TaurusTrendSet can be considered as a container of (sorted) curves.
+    As such, the curves contained by it can be accessed by index::
+
+        ts = TaurusTrendSet('eval:rand(3)')
+        # (...) wait for a Taurus Event arriving so that the curves are created
+        ncurves = len(ts)  # ncurves will be 3 (assuming the event arrived)
+        curve0 = ts[0]     # you can access the curve by index
+
+
+    Note that internally each curve is a :class:`pyqtgraph.PlotDataItem` (i.e.,
+    it is not aware of events by itself, but it relies on the TaurusTrendSet
+    object to update its values)
+    """
+
+    def __init__(self, *args, **kwargs):
+        _ = kwargs.pop("xModel", None)
+        yModel = kwargs.pop("yModel", None)
+        colors = kwargs.pop("colors", None)
+        if colors is None:
+            colors = LoopList(CURVE_COLORS)
+        name = kwargs.pop("name", None)
+        if isinstance(name, list):
+            base_name = name[0]
+            cnames = name[1:]
+            if yModel is None:
+                cnames = []
+                self.warning("curve names ignored because yModel is not given")
+        else:
+            base_name, cnames = name, []
+        PlotDataItem.__init__(self, x=[], y=[], name=base_name)
+        TaurusBaseComponent.__init__(self, "TaurusBaseComponent")
+        self._UImodifiable = False
+        self._maxBufferSize = 65536  # (=2**16, i.e., 64K events))
+        self._xBuffer = None
+        self._yBuffer = None
+        self._curveColors = colors
+        self._args = args
+        self._kwargs = kwargs
+        self._curves = []
+        self._timer = Qt.QTimer()
+        self._timer.timeout.connect(self._forceRead)
+        self._legend = None
+
+        # register config properties
+        self.setModelInConfig(True)
+        self.registerConfigProperty(
+            self._getCurveNames(), self._setCurveNames, "CurveNames"
+        )
+        self.registerConfigProperty(
+            self._getCurvesOpts, self._setCurvesOpts, "opts"
+        )
+        # TODO: store forceReadPeriod config
+        # TODO: store _maxBufferSize config
+        if yModel is not None:
+            self.setModel(yModel)
+            if cnames:
+                self._setCurveNames(cnames)
+
+    def __repr__(self):
+        return "<TrendSet {} ({} items)>".format(self.base_name(), len(self))
+
+    def name(self):
+        """Reimplemented from PlotDataItem to avoid having the ts itself added
+        to legends.
+
+        .. seealso:: :meth:`basename`
+        """
+        return None
+
+    def base_name(self):
+        """Returns the name of the trendset, which is used as a prefix for
+        constructing the associated curves names
+
+        .. seealso:: :meth:`name`
+        """
+        return PlotDataItem.name(self)
+
+    def __getitem__(self, k):
+        return self._curves[k]
+
+    def __len__(self):
+        return len(self._curves)
+
+    def __contains__(self, k):
+        return k in self._curves
+
+    def setModel(self, name):
+        """Reimplemented from :meth:`TaurusBaseComponent.setModel`"""
+        TaurusBaseComponent.setModel(self, name)
+        # force a read to ensure that the curves are created
+        self._forceRead()
+
+    def _initBuffers(self, ntrends):
+        """initializes new x and y buffers"""
+
+        self._yBuffer = ArrayBuffer(
+            numpy.zeros((min(128, self._maxBufferSize), ntrends), dtype="d"),
+            maxSize=self._maxBufferSize,
+        )
+
+        self._xBuffer = ArrayBuffer(
+            (numpy.zeros(min(128, self._maxBufferSize), dtype="d")),
+            maxSize=self._maxBufferSize,
+        )
+
+    def _initCurves(self, ntrends):
+        """ Initializes new curves """
+
+        # self._removeFromLegend(self._legend)
+
+        # remove previously existing curves from views
+        self._updateViewBox(None)
+
+        self._curves = []
+
+        if self._curveColors is None:
+            self._curveColors = LoopList(CURVE_COLORS)
+            self._curveColors.setCurrentIndex(-1)
+
+        a = self._args
+        kw = self._kwargs.copy()
+
+        base_name = (
+            self.base_name()
+            or taurus.Attribute(self.getModel()).getSimpleName()
+        )
+
+        for i in range(ntrends):
+            subname = "%s[%i]" % (base_name, i)
+            kw["name"] = subname
+            curve = TrendCurve(*a, **kw)
+            if "pen" not in kw:
+                curve.setPen(next(self._curveColors))
+            self._curves.append(curve)
+        self._updateViewBox(self.getViewBox())
+
+    def _addToLegend(self, legend):
+        # ------------------------------------------------------------------
+        # In theory, TaurusTrendSet only uses viewBox.addItem to add its
+        # sub-curves to the plot. In theory this should not add the curves
+        # to the legend, and therefore we should do it here.
+        # But somewhere the curves are already being added to the legend, and
+        # if we re-add them here we get duplicated legend entries
+        # TODO: Find where are the curves being added to the legend
+        pass
+        # if legend is None:
+        #    return
+        # for c in self._curves:
+        #    legend.addItem(c, c.name())
+        # -------------------------------------------------------------------
+
+    def _removeFromLegend(self, legend):
+        if legend is None:
+            return
+        for c in self._curves:
+            legend.removeItem(c.name())
+
+    def _updateViewBox(self, viewBox):
+        """Add/remove the "extra" curves from the viewbox if needed"""
+        for curve in self._curves:
+            curve_viewBox = curve.getViewBox()
+            if curve_viewBox is not None:
+                plotItem = None
+                viewWidget = curve_viewBox.getViewWidget()
+                if viewWidget is not None:
+                    plotItem = viewWidget.getPlotItem()
+                curve_viewBox.removeItem(curve)
+                if plotItem is not None:
+                    plotItem.removeItem(curve)
+            if viewBox is not None:
+                plotItem = None
+                viewWidget = viewBox.getViewWidget()
+                if viewWidget is not None:
+                    plotItem = viewWidget.getPlotItem()
+                if plotItem is not None:
+                    curve = ensure_unique_curve_name(curve, plotItem)
+                    _cname = curve.name()
+                    params = {"all trends": _cname}
+                    plotItem.addItem(curve, params=params)
+
+    def _updateBuffers(self, evt_value):
+        """Update the x and y buffers with the new data. If the new data is
+        not compatible with the existing buffers, the buffers are reset
+        """
+        rvalue = evt_value.rvalue
+        try:
+            # We use .magnitude here as a workaround for older pint affected by
+            # https://github.com/hgrecco/pint/issues/509
+            ntrends = numpy.size(rvalue.magnitude)
+        except AttributeError:
+            # support boolean values
+            _v = numpy.array(rvalue)
+            if _v.dtype is numpy.dtype("bool"):
+                from taurus.core.units import Quantity
+                rvalue = Quantity(_v)
+                ntrends = _v.size
+            else:
+                raise
+
+        if not self._isDataCompatible(rvalue, ntrends):
+            self._initBuffers(ntrends)
+            self._yUnits = rvalue.units
+            self._initCurves(ntrends)
+
+        try:
+            self._yBuffer.append(rvalue.to(self._yUnits).magnitude)
+        except Exception as e:
+            self.warning(
+                "Problem updating buffer Y (%s):%s", rvalue, e
+            )
+            evt_value = None
+
+        try:
+            self._xBuffer.append(evt_value.time.totime())
+        except Exception as e:
+            self.warning("Problem updating buffer X (%s):%s", evt_value, e)
+
+        return self._xBuffer.contents(), self._yBuffer.contents()
+
+    def _isDataCompatible(self, rvalue, ntrends):
+        """
+        Check that the new rvalue is compatible with the current data in the
+        buffers. Check shape and unit compatibility.
+        """
+        if self._xBuffer is None or self._yBuffer is None:
+            return False
+
+        if rvalue.dimensionality != self._yUnits.dimensionality:
+            return False
+
+        current_trends = numpy.prod(self._yBuffer.contents().shape[1:])
+
+        if ntrends != current_trends:
+            return False
+
+        return True
+
+    def _addData(self, x, y):
+        for i, curve in enumerate(self._curves):
+            curve.setData(x=x, y=y[:, i])
+
+    def clearBuffer(self):
+        """Reset the buffered data"""
+        self._initBuffers(len(self._curves))
+
+    def handleEvent(self, evt_src, evt_type, evt_value):
+        """Reimplementation of :meth:`TaurusBaseComponent.handleEvent`"""
+
+        # model = evt_src if evt_src is not None else self.getModelObj()
+
+        if (
+            evt_value is None
+            or not hasattr(evt_value, "rvalue")
+            or evt_value.rvalue is None
+        ):
+            self.info("Invalid value. Ignoring.")
+            return
+        else:
+            try:
+                xValues, yValues = self._updateBuffers(evt_value)
+            except Exception:
+                # TODO: handle dropped events see: TaurusTrend._onDroppedEvent
+                raise
+
+        self._addData(xValues, yValues)
+
+    def parentChanged(self):
+        """Reimplementation of :meth:`PlotDataItem.parentChanged` to handle
+        the change of the containing viewbox
+        """
+        PlotDataItem.parentChanged(self)
+
+        self._updateViewBox(self.getViewBox())
+
+        # update legend if needed
+        try:
+            legend = self.getViewWidget().getPlotItem().legend
+        except Exception:
+            legend = None
+        if legend is not self._legend:
+            self._removeFromLegend(self._legend)
+            self._addToLegend(legend)
+            self._legend = legend
+
+        # Set period from ForcedReadTool (if found)
+        try:
+            for a in self.getViewBox().menu.actions():
+                if isinstance(a, ForcedReadTool) and a.autoconnect():
+                    self.setForcedReadPeriod(a.period())
+                    break
+        except Exception as e:
+            self.debug("cannot set period from ForcedReadTool: %r", e)
+
+    @property
+    def forcedReadPeriod(self):
+        """Returns the forced reading period (in ms). A value <= 0 indicates
+        that the forced reading is disabled
+        """
+        return self._timer.interval()
+
+    def setForcedReadPeriod(self, period):
+        """
+        Forces periodic reading of the subscribed attribute in order to show
+        new points even if no events are received.
+        It will create fake events as needed with the read value.
+        It will also block the plotting of regular events when period > 0.
+
+        :param period: (int) period in milliseconds. Use period<=0 to stop the
+                       forced periodic reading
+        """
+
+        # stop the timer and remove the __ONLY_OWN_EVENTS filter
+        self._timer.stop()
+        filters = self.getEventFilters()
+        if self.__ONLY_OWN_EVENTS in filters:
+            filters.remove(self.__ONLY_OWN_EVENTS)
+            self.setEventFilters(filters)
+
+        # if period is positive, set the filter and start
+        if period > 0:
+            self.insertEventFilter(self.__ONLY_OWN_EVENTS)
+            self._timer.start(period)
+
+    def _forceRead(self, cache=False):
+        """Forces a read of the associated attribute.
+
+        :param cache: (bool) If True, the reading will be done with cache=True
+                      but the timestamp of the resulting event will be replaced
+                      by the current time. If False, no cache will be used at
+                      all.
+        """
+        value = self.getModelValueObj(cache=cache)
+        if cache and value is not None:
+            value = copy.copy(value)
+            value.time = TaurusTimeVal.now()
+        self.fireEvent(self, TaurusEventType.Periodic, value)
+
+    def __ONLY_OWN_EVENTS(self, s, t, v):
+        """An event filter that rejects all events except those that originate
+        from this object
+        """
+        if s is self:
+            return s, t, v
+        else:
+            return None
+
+    def _getCurveNames(self):
+        """returns the list of curve names (may have been changed by user!)"""
+        return [c.name() for c in self._curves]
+
+    def _setCurveNames(self, names):
+        """restore options to curves"""
+        # If no curves are yet created, force a read to create them
+        if not self._curves:
+            self._forceRead(cache=True)
+        if len(names) != len(self._curves):
+            self.warning("Cannot restore trend curve names (%s)", names)
+        for curve, name in zip(self._curves, names):
+            curve.setData(name=name)
+
+    def _getCurvesOpts(self):
+        """returns a list of serialized opts (one for each curve)"""
+        from taurus_pyqtgraph import serialize_opts
+
+        return [serialize_opts(copy.copy(c.opts)) for c in self._curves]
+
+    def _setCurvesOpts(self, all_opts):
+        """restore options to curves"""
+        # If no curves are yet created, force a read to create them
+        if not self._curves:
+            self._forceRead(cache=True)
+        # Check consistency in the number of curves
+        if len(self._curves) != len(all_opts):
+            self.warning(
+                "Cannot apply curve options (mismatch in curves number)"
+            )
+            return
+        from taurus_pyqtgraph import deserialize_opts
+
+        for c, opts in zip(self._curves, all_opts):
+            c.opts = deserialize_opts(opts)
+
+            # This is a workaround for the following pyqtgraph's bug:
+            # https://github.com/pyqtgraph/pyqtgraph/issues/531
+            if opts["connect"] == "all":
+                c.opts["connect"] = "all"
+            elif opts["connect"] == "pairs":
+                c.opts["connect"] = "pairs"
+            elif opts["connect"] == "finite":
+                c.opts["connect"] = "finite"
+
+    def getFullModelNames(self):
+        """
+        Return a tuple of (None, fullmodelname) for API compatibility with
+        :class:`TaurusPlotDataItem`.
+        """
+        return (None, self.getFullModelName())
+
+    def setBufferSize(self, buffer_size):
+        """sets the maximum number of points to store per trend curve
+
+        :param buffer_size: (int) max number of points to store per trend curve
+        """
+        self._maxBufferSize = buffer_size
+        try:
+            if self._xBuffer is not None:
+                # discard oldest data if needed for downsizing
+                excess = len(self._xBuffer) - buffer_size
+                if excess > 0:
+                    self._xBuffer.moveLeft(excess)
+                    self._xBuffer.resizeBuffer(buffer_size)
+                # resize
+                self._xBuffer.setMaxSize(buffer_size)
+            if self._yBuffer is not None:
+                # discard oldest data if needed for downsizing
+                excess = len(self._yBuffer) - buffer_size
+                if excess > 0:
+                    self._yBuffer.moveLeft(excess)
+                    self._yBuffer.resizeBuffer(buffer_size)
+                # resize
+                self._yBuffer.setMaxSize(buffer_size)
+        except ValueError:
+            self.info(
+                "buffer downsizing  requested."
+                + "Current contents will be discarded"
+            )
+            self.clearBuffer()
+
+    def bufferSize(self):
+        """returns the maximum number of points to be stored by the trends"""
+        return self._maxBufferSize
+
+
+if __name__ == "__main__":
+    import sys
+    import pyqtgraph as pg
+    from taurus.qt.qtgui.application import TaurusApplication
+    from taurus_pyqtgraph import (
+        # TaurusTrendSet,
+        DateAxisItem,
+        XAutoPanTool,
+        # TaurusModelChooserTool,
+        CurvesPropertiesTool,
+    )
+
+    from taurus.core.taurusmanager import TaurusManager
+
+    taurusM = TaurusManager()
+    taurusM.changeDefaultPollingPeriod(1000)  # ms
+
+    app = TaurusApplication()
+
+    # a standard pyqtgraph plot_item
+    axis = DateAxisItem(orientation="bottom")
+    w = pg.PlotWidget()
+    axis.attachToPlotItem(w.getPlotItem())
+
+    cp = CurvesPropertiesTool()
+    cp.attachToPlotItem(w.getPlotItem())
+
+    autopan = XAutoPanTool()
+    autopan.attachToPlotItem(w.getPlotItem())
+
+    # add legend to the plot, for that we have to give a name to plot items
+    w.addLegend()
+
+    # adding a taurus data item...
+    c2 = TaurusTrendSet(name="foo")
+    c2.setModel("eval:rand(2)")
+    # c2.setForcedReadPeriod(500)
+
+    w.addItem(c2)
+
+    # ...and remove it after a while
+    def rem():
+        w.removeItem(c2)
+
+    Qt.QTimer.singleShot(2000, rem)
+
+    # modelchooser = TaurusModelChooserTool(itemClass=TaurusTrendSet)
+    # modelchooser.attachToPlotItem(w.getPlotItem())
+
+    w.show()
+
+    ret = app.exec_()
+
+    # import pprint
+
+    # pprint.pprint(c2.createConfig())
+
+    sys.exit(ret)
