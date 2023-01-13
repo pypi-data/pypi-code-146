@@ -1,0 +1,1 @@
+from ._filelock import sync_append
