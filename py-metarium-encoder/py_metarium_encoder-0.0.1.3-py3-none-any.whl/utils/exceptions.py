@@ -1,0 +1,2 @@
+class KuriAlreadyExistsError(Exception):
+    pass
