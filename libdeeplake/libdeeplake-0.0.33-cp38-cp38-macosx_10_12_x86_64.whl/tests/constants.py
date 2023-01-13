@@ -1,0 +1,5 @@
+MNIST_DS_NAME = "hub://activeloop/mnist-train"
+COCO_DS_NAME = "hub://activeloop/coco-train"
+CIFAR10_DS_NAME = "hub://activeloop/cifar10-train"
+IMAGENET_DS_NAME = "hub://activeloop/imagenet-train"
+LAION_400_M_DS_NAME = "hub://activeloop-test/laion400m-data"
