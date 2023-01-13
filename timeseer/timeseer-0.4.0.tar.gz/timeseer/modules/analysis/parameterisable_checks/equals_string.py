@@ -1,0 +1,116 @@
+"""A check that evaluates whether a series is equal to a user-specified string.
+"""
+
+from datetime import datetime
+
+import pandas as pd
+
+from timeseer import (
+    AnalysisInput,
+    AnalysisResult,
+    DataType,
+    EventFrame,
+    ModuleParameterType,
+)
+from timeseer.analysis.utils import (
+    event_frames_from_dataframe,
+    process_open_intervals,
+    handle_open_intervals,
+)
+
+
+_CHECK_NAME = "Equals string"
+_EVENT_FRAME_NAME = "Equals string"
+
+META = {
+    "checks": [
+        {
+            "name": _CHECK_NAME,
+            "event_frames": [_EVENT_FRAME_NAME],
+        }
+    ],
+    "conditions": [
+        {
+            "min_series": 1,
+            "min_data_points": 1,
+            "data_type": [DataType.STRING],
+        }
+    ],
+    "parameters": [
+        {
+            "name": "value",
+            "type": ModuleParameterType.STRING,
+            "helpText": "All occurrences of the value will be considered an anomaly.",
+        }
+    ],
+    "signature": "univariate",
+}
+
+
+def _get_intervals(outliers, df, event_type):
+    outliers = pd.Series(data=outliers, index=df.index).fillna(False)
+    outlier_grp = (outliers != outliers.shift().bfill()).cumsum()
+    outlier_intervals = (
+        df.assign(outlier_grp=outlier_grp)[outliers]
+        .reset_index()
+        .groupby(["outlier_grp"])
+        .agg(start_date=("ts", "first"), end_date=("ts", "last"))
+    )
+    outlier_intervals["type"] = event_type
+    return outlier_intervals
+
+
+def _get_active_points(df: pd.DataFrame, value: float):
+    return df["value"] == value
+
+
+def _clean_dataframe(df: pd.DataFrame):
+    return df[~df.index.duplicated(keep="first")].dropna().sort_index()
+
+
+def _run_limit_check(
+    analysis_input: AnalysisInput,
+) -> tuple[list[EventFrame], datetime]:
+    df = analysis_input.data
+    df = _clean_dataframe(df)
+    value = analysis_input.parameters["value"]
+
+    active_points = _get_active_points(df, value)
+    intervals = _get_intervals(active_points, df, _EVENT_FRAME_NAME)
+    intervals = handle_open_intervals(df, intervals)
+
+    frames = event_frames_from_dataframe(process_open_intervals(intervals))
+
+    last_analyzed_point = df.index[-1]
+
+    return list(frames), last_analyzed_point
+
+
+def _is_valid_input(
+    analysis_input: AnalysisInput, median_archival_step: list[float]
+) -> tuple[str, bool]:
+    if "value" not in analysis_input.parameters:
+        return "No value parameter provided", False
+    if median_archival_step is None or len(median_archival_step) == 0:
+        return "No median archival step", False
+    if len(_clean_dataframe(analysis_input.data)) == 0:
+        return "No data", False
+    return "OK", True
+
+
+# pylint: disable=missing-function-docstring
+def run(analysis_input: AnalysisInput) -> AnalysisResult:
+    median_archival_step = [
+        statistic.result
+        for statistic in analysis_input.statistics
+        if statistic.name == "Archival time median"
+    ]
+    message, is_ok = _is_valid_input(analysis_input, median_archival_step)
+    if not is_ok:
+        return AnalysisResult(condition_message=message)
+
+    frames, last_analyzed_point = _run_limit_check(analysis_input)
+    return AnalysisResult(
+        event_frames=frames,
+        last_analyzed_point=last_analyzed_point.to_pydatetime(),
+    )
