@@ -1,0 +1,6 @@
+__title__ = "znotify"
+__description__ = "Python SDK for ZNotify."
+__url__ = "https://github.com/ZNotify/py-sdk"
+__version__ = "0.3.0"
+__author__ = "Zxilly"
+__license__ = "Apache-2.0"
