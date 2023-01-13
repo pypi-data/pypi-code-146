@@ -1,0 +1,1 @@
+from .algorithm_interface import AlgorithmInterface
