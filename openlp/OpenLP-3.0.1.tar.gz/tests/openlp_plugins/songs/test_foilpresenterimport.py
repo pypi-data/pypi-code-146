@@ -1,0 +1,169 @@
+# -*- coding: utf-8 -*-
+
+##########################################################################
+# OpenLP - Open Source Lyrics Projection                                 #
+# ---------------------------------------------------------------------- #
+# Copyright (c) 2008-2023 OpenLP Developers                              #
+# ---------------------------------------------------------------------- #
+# This program is free software: you can redistribute it and/or modify   #
+# it under the terms of the GNU General Public License as published by   #
+# the Free Software Foundation, either version 3 of the License, or      #
+# (at your option) any later version.                                    #
+#                                                                        #
+# This program is distributed in the hope that it will be useful,        #
+# but WITHOUT ANY WARRANTY; without even the implied warranty of         #
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the          #
+# GNU General Public License for more details.                           #
+#                                                                        #
+# You should have received a copy of the GNU General Public License      #
+# along with this program.  If not, see <https://www.gnu.org/licenses/>. #
+##########################################################################
+"""
+This module contains tests for the SongShow Plus song importer.
+"""
+from unittest import TestCase
+from unittest.mock import MagicMock, patch
+
+from openlp.plugins.songs.lib.importers.foilpresenter import FoilPresenter
+
+
+class TestFoilPresenter(TestCase):
+    """
+    Test the functions in the :mod:`foilpresenterimport` module.
+    """
+    def setUp(self):
+        self.to_str_patcher = patch('openlp.plugins.songs.lib.importers.foilpresenter.to_str')
+        self.clean_song_patcher = patch('openlp.plugins.songs.lib.importers.foilpresenter.clean_song')
+        self.objectify_patcher = patch('openlp.plugins.songs.lib.importers.foilpresenter.objectify')
+        self.process_authors_patcher = \
+            patch('openlp.plugins.songs.lib.importers.foilpresenter.FoilPresenter._process_authors')
+        self.process_cclinumber_patcher = \
+            patch('openlp.plugins.songs.lib.importers.foilpresenter.FoilPresenter._process_cclinumber')
+        self.process_comments_patcher = \
+            patch('openlp.plugins.songs.lib.importers.foilpresenter.FoilPresenter._process_comments')
+        self.process_lyrics_patcher = \
+            patch('openlp.plugins.songs.lib.importers.foilpresenter.FoilPresenter._process_lyrics')
+        self.process_songbooks_patcher = \
+            patch('openlp.plugins.songs.lib.importers.foilpresenter.FoilPresenter._process_songbooks')
+        self.process_titles_patcher = \
+            patch('openlp.plugins.songs.lib.importers.foilpresenter.FoilPresenter._process_titles')
+        self.process_topics_patcher = \
+            patch('openlp.plugins.songs.lib.importers.foilpresenter.FoilPresenter._process_topics')
+        self.re_patcher = patch('openlp.plugins.songs.lib.importers.foilpresenter.re')
+        self.song_patcher = patch('openlp.plugins.songs.lib.importers.foilpresenter.Song')
+        self.song_xml_patcher = patch('openlp.plugins.songs.lib.importers.foilpresenter.SongXML')
+        self.translate_patcher = patch('openlp.plugins.songs.lib.importers.foilpresenter.translate')
+
+        self.mocked_child = self.to_str_patcher.start()
+        self.mocked_clean_song = self.clean_song_patcher.start()
+        self.mocked_objectify = self.objectify_patcher.start()
+        self.mocked_process_authors = self.process_authors_patcher.start()
+        self.mocked_process_cclinumber = self.process_cclinumber_patcher.start()
+        self.mocked_process_comments = self.process_comments_patcher.start()
+        self.mocked_process_lyrics = self.process_lyrics_patcher.start()
+        self.mocked_process_songbooks = self.process_songbooks_patcher.start()
+        self.mocked_process_titles = self.process_titles_patcher.start()
+        self.mocked_process_topics = self.process_topics_patcher.start()
+        self.mocked_re = self.re_patcher.start()
+        self.mocked_song = self.song_patcher.start()
+        self.mocked_song_xml = self.song_xml_patcher.start()
+        self.mocked_translate = self.translate_patcher.start()
+        self.mocked_child.return_value = 'Element Text'
+        self.mocked_translate.return_value = 'Translated String'
+        self.mocked_manager = MagicMock()
+        self.mocked_song_import = MagicMock()
+
+    def tearDown(self):
+        self.to_str_patcher.stop()
+        self.clean_song_patcher.stop()
+        self.objectify_patcher.stop()
+        self.process_authors_patcher.stop()
+        self.process_cclinumber_patcher.stop()
+        self.process_comments_patcher.stop()
+        self.process_lyrics_patcher.stop()
+        self.process_songbooks_patcher.stop()
+        self.process_titles_patcher.stop()
+        self.process_topics_patcher.stop()
+        self.re_patcher.stop()
+        self.song_patcher.stop()
+        self.song_xml_patcher.stop()
+        self.translate_patcher.stop()
+
+    def test_create_foil_presenter(self):
+        """
+        Test creating an instance of the foil_presenter class
+        """
+        # GIVEN: A mocked out "manager" and "SongImport" instance
+        mocked_manager = MagicMock()
+        mocked_song_import = MagicMock()
+
+        # WHEN: An foil_presenter instance is created
+        foil_presenter_instance = FoilPresenter(mocked_manager, mocked_song_import)
+
+        # THEN: The instance should not be None
+        assert foil_presenter_instance is not None, 'foil_presenter instance should not be none'
+
+    def test_no_xml(self):
+        """
+        Test calling xml_to_song with out the xml argument
+        """
+        # GIVEN: A mocked out "manager" and "SongImport" as well as an foil_presenter instance
+        mocked_manager = MagicMock()
+        mocked_song_import = MagicMock()
+        foil_presenter_instance = FoilPresenter(mocked_manager, mocked_song_import)
+
+        # WHEN: xml_to_song is called without valid an argument
+        for arg in [None, False, 0, '']:
+            result = foil_presenter_instance.xml_to_song(arg)
+
+            # Then: xml_to_song should return False
+            assert result is None, 'xml_to_song should return None when called with %s' % arg
+
+    def test_encoding_declaration_removal(self):
+        """
+        Test that the encoding declaration is removed
+        """
+        # GIVEN: A reset mocked out re and an instance of foil_presenter
+        self.mocked_re.reset()
+        foil_presenter_instance = FoilPresenter(self.mocked_manager, self.mocked_song_import)
+
+        # WHEN: xml_to_song is called with a string with an xml encoding declaration
+        foil_presenter_instance.xml_to_song('<?xml version="1.0" encoding="UTF-8"?>\n<foilpresenterfolie>')
+
+        # THEN: the xml encoding declaration should have been stripped
+        self.mocked_re.compile.sub.called_with('\n<foilpresenterfolie>')
+
+    def test_no_encoding_declaration(self):
+        """
+        Check that the xml sting is left intact when no encoding declaration is made
+        """
+        # GIVEN: A reset mocked out re and an instance of foil_presenter
+        self.mocked_re.reset()
+        foil_presenter_instance = FoilPresenter(self.mocked_manager, self.mocked_song_import)
+
+        # WHEN: xml_to_song is called with a string without an xml encoding declaration
+        foil_presenter_instance.xml_to_song('<foilpresenterfolie>')
+
+        # THEN: the string should have been left intact
+        self.mocked_re.compile.sub.called_with('<foilpresenterfolie>')
+
+    def test_process_lyrics_no_verses(self):
+        """
+        Test that _process_lyrics handles song files that have no verses.
+        """
+        # GIVEN: A mocked foilpresenterfolie with no attribute strophe, a mocked song and a
+        #       foil presenter instance
+        self.process_lyrics_patcher.stop()
+        self.mocked_song_xml.reset()
+        mock_foilpresenterfolie = MagicMock()
+        del mock_foilpresenterfolie.strophen.strophe
+        mocked_song = MagicMock()
+        foil_presenter_instance = FoilPresenter(self.mocked_manager, self.mocked_song_import)
+
+        # WHEN: _process_lyrics is called
+        result = foil_presenter_instance._process_lyrics(mock_foilpresenterfolie, mocked_song)
+
+        # THEN: _process_lyrics should return None and the song_import log_error method should have been called once
+        assert result is None
+        self.mocked_song_import.log_error.assert_called_once_with('Element Text', 'Translated String')
+        self.process_lyrics_patcher.start()
