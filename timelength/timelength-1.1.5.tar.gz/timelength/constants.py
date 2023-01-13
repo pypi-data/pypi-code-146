@@ -1,0 +1,9 @@
+SEPERATORS = [
+    ",",
+    " ",
+    "\t"
+]
+
+CONNECTORS = [
+    "and"
+]
