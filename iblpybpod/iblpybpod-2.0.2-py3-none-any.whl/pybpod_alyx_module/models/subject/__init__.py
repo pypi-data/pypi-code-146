@@ -1,0 +1,1 @@
+from pybpod_alyx_module.models.subject.alyx_subject import AlyxSubject as Subject

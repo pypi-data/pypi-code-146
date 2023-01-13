@@ -1,0 +1,1 @@
+#from pybpod_alyx_module.models.user.user_window import UserWindow as User
