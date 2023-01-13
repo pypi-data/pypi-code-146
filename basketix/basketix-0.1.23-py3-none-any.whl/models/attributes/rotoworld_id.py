@@ -1,0 +1,3 @@
+"""rotoworldId type"""
+
+RotoworldId = str
