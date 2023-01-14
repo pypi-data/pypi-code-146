@@ -1,0 +1,1 @@
+from modoptima.MasterTrainer import YOLOV7
