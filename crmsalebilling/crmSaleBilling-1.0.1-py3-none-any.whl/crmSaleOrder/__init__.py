@@ -1,0 +1,11 @@
+a = {'Result': {'ResponseStatus': {'ErrorCode': 500, 'IsSuccess': False,
+                               'Errors': [{'FieldName': '', 'Message': '单据的所有分录必须关联生成。', 'DIndex': 0},
+                                          {'FieldName': 'FCustomerID', 'Message': '字段“客户”是必填项', 'DIndex': 0},
+                                          {'FieldName': 'FMaterialID', 'Message': '单据体“明细信息”第1行字段“物料编码”是必填项',
+                                           'DIndex': 0},
+                                          {'FieldName': 'FUnitID', 'Message': '单据体“明细信息”第1行字段“销售单位”是必填项', 'DIndex': 0},
+                                          {'FieldName': 'FBaseUnitID', 'Message': '单据体“明细信息”第1行字段“基本单位”是必填项',
+                                           'DIndex': 0},
+                                          {'FieldName': '', 'Message': '单据编号为“12324354”的发货通知单，第1行分录，数量不能为0！',
+                                           'DIndex': 0}], 'SuccessEntitys': [], 'SuccessMessages': [], 'MsgCode': 11},
+            'Id': '', 'Number': '', 'NeedReturnData': [{}]}}
