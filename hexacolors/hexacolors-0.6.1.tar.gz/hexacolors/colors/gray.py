@@ -1,0 +1,10 @@
+def black():return 0x00000
+def grey11():return 0x1C1C1C
+def grey21():return 0x363636
+def grey31():return 0x4F4F4F
+def dimgray():return 0x696969
+def gray():return 0x808080
+def darkgray():return 0xA9A9A9
+def silver():return 0xC0C0C0
+def ligthgrey():return 0xD3D3D3
+def gainsboro():return 0xDCDCDC

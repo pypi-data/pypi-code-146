@@ -1,0 +1,13 @@
+def mediumslateBllue():return 0x7B68EE
+def mediumpurple():return 0x9370DB
+def blueviolet():return 0x8A2BE2
+def indigo():return 0x4B0082
+def darkviolet():return 0x9400D3
+def darkorchid():return 0x9932CC
+def mediumorchid():return 0xBA55D3
+def purple():return 0xA020F0
+def darkmagenta():return 0x8B008B
+def magenta():return 0xFF00FF
+def violet():return 0xEE82EE
+def orchid():return 0xDA70D6
+def plum():return 0xDDA0DD
