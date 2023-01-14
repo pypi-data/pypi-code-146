@@ -1,0 +1,4 @@
+MIN_LENGTH = 1
+MAX_LENGTH = 400
+
+IDENTIFIER_REGEX_CONDITION = r"^[A-Za-z0-9\.\-:_,=\/@]+$"
