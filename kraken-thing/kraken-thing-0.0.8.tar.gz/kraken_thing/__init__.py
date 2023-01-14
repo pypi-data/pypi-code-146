@@ -1,0 +1,1 @@
+from kraken_thing.kraken_class_thing import Thing
