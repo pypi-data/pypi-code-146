@@ -1,0 +1,30 @@
+# -*- coding: utf-8 -*-
+from setuptools import setup
+
+packages = \
+['fuelwatcher']
+
+package_data = \
+{'': ['*']}
+
+install_requires = \
+['requests>=2.28.2,<3.0.0']
+
+setup_kwargs = {
+    'name': 'fuelwatcher',
+    'version': '0.3.1',
+    'description': "A simple python module that scrapes XML data from the government of Western Australia's FuelWatch website that makes parsing a breeze.",
+    'long_description': '```\n    ______           __               __       __\n   / ____/_  _____  / /      ______ _/ /______/ /_  ___  _____\n  / /_  / / / / _ \\/ / | /| / / __ `/ __/ ___/ __ \\/ _ \\/ ___/\n / __/ / /_/ /  __/ /| |/ |/ / /_/ / /_/ /__/ / / /  __/ /\n/_/    \\__,_/\\___/_/ |__/|__/\\__,_/\\__/\\___/_/ /_/\\___/_/\n```\n\n# Fuelwatcher\n\nA simple python module that scrapes XML data from the government of Western Australia\'s FuelWatch website that makes parsing a breeze.\n\n> Fuelwatch.wa.gov.au provides information on fuel prices by fuel type, location, brand and region within Western Australia.\n> Fuelwatcher will parse the XML from the fuelwatch.wa.gov.au RSS feed giving the developer an easy way to manipulate the information.\n\n## Installation\n\nRequires `pip` to be installed or `pip3` dependent on system, or environment.\n\n```sh\npip install fuelwatcher\n```\n\n## Usage example\n\n### Basic Usage\n\n```python\nfrom fuelwatcher import FuelWatch\n\napi = FuelWatch()\n\n# returns byte string of xml.\napi.query(product=2, region=25, day=\'yesterday\')\n\n# iterates over each fuel station entry in the byte string\n# and returns list of dictionaries in human-readable text\nxml_query = api.get_xml\n\nprint(xml_query)\n\n>>>> [{\'title\': \'138.5: Puma Bayswater\', \'description\': \'Address: 502 Guildford Rd, BAYSWATER, Phone: (08) 9379 1322, Open 24 hours\', \'brand\': \'Puma\', \'date\': \'2018-04-05\', \'price\': \'138.5\', \'trading-name\': \'Puma Bayswater\', \'location\': \'BAYSWATER\', \'address\': \'502 Guildford Rd\', \'phone\': \'(08) 9379 1322\', \'latitude\': \'-31.919556\', \'longitude\': \'115.929069\', \'site-features\': \', Open 24 hours\'} ..snip... \'}]\n\n# python dictionary parsing\nprint(xml_query[0][\'title\'])\n>>>> \'138.5: Puma Bayswater\'\n\n```\n\nFuelwatcher can also transform the XML into JSON format. It is as simple as calling the `get_json` method.\n\n```python\n\napi = FuelWatch()\n\napi.query(region=1)\n\njson_response = api.get_json\n\n>>>> [\n>>>>   {\n>>>>       "title": "143.9: United Boulder Kalgoorlie",\n>>>>       "description": "Address: Cnr Lane St & Davis St, BOULDER, Phone: (08) 9093 1543",\n>>>>       "brand": "United",\n>>>>       "date": "2018-04-13",\n>>>>       "price": "143.9",\n>>>>       ... snip ...\n>>>>       "longitude": "121.433746",\n>>>>       "site-features": "Unmanned Station, "\n>>>>   }\n>>>> ]\n```\n\nFor most operations the `get_xml()` or `get_json()` method will be sufficient. If the developer wants to parse the raw RSS XML then the `get_raw()` method is available.\nThis will return bytes.\n\n```python\nget_raw = api.get_raw\n\nprint(get_raw)\n\n>>>> (b\'<?xml version="1.0" encoding="UTF-8"?>\\r\\n<rss version="2.0"><channel><title>FuelWatch Prices For North of River</title><ttl>720</ttl><link>http://www.fuelwatch.wa.gov.au</link><description>05/04/2018 - North of River</description><language>en-us</language><copyright>Copyright 2005 FuelWatch... snip...</item></channel></rss>\\r\\n\')\n\nprint(type(get_raw))\n\n>>>> <class \'bytes\'>\n\n```\n\nThe query method takes several keyword arguments.\nA query without any arguments will return *all* of today\'s Unleaded stations in Western Australia.\n\nAs guide query takes the following kwargs\n\n```python\ndef query(self, product: int = None, suburb: str = None, region: int = None,\n            brand: int = None, surrounding: str = None, day: str = None):\n```\n\n**Note**\n\nIf `suburb` is set then `surrounding` will default to `yes`. To get only the suburb, and not surrounding areas an explicit `surrounding=\'no\'` must be called.\n\nSetting `region` with `suburb` and `surrounding` will have unexpected results and are best not mixed together.\n\nSimply put, if you want just one `suburb` then set `surrounding=\'no\'`, else leave the default. Only one `suburb` can be set per query. If a `region` is selected, do not set `surrounding` or `suburb`.\n\nA list of valid suburbs, brands, regions and products (fuel types) can be found in [constants.py](https://github.com/danielmichaels/fuelwatcher/blob/master/fuelwatcher/constants.py)\n\nFuelwatcher will run validation on the `query` method and throw AssertionError if an invalid integer or string is input\n\n```python\napi.query(product=20) # product=20 is invalid\n\n>>> .... error snippet....\n>>> AssertionError: Invalid Product Integer.\n```\n\n## Release History\n\n* 0.2.1\n    * README.md updated\n* 0.2.0\n    * __Breaking Change!__\n    * @property added raw, xml and json methods\n    * json output now supported\n* 0.1.1\n    * Include correct packages in setup.py\n* 0.1.0\n    * First release live to PyPi\n* 0.1.0rc2\n    * Minor formatting fixes\n* 0.1.0rc1\n    * The first release candidate\n* 0.0.1\n    * Work in progress\n\n## Meta\n\nDaniel Michaels – https://www.danielms.site\n\nDistributed under the MIT license. See ``LICENSE`` for more information.\n\n## Contributing\n\nAll requests, ideas or improvements are welcomed!\n\n1. Fork it\n2. Create your feature branch (`git checkout -b feature/fooBar`)\n3. Commit your changes (`git commit -am \'Add some fooBar\'`)\n4. Push to the branch (`git push origin feature/fooBar`)\n5. Create a new Pull Request\n\n## Inspired by..\n\nA local python meetup group idea that turned into a PyPi package for anyone to use!\n',
+    'author': 'Daniel Michaels',
+    'author_email': 'dan@danielms.site',
+    'maintainer': 'None',
+    'maintainer_email': 'None',
+    'url': 'https://github.com/danielmichaels/fuelwatcher',
+    'packages': packages,
+    'package_data': package_data,
+    'install_requires': install_requires,
+    'python_requires': '>=3.9,<4.0',
+}
+
+
+setup(**setup_kwargs)
