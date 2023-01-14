@@ -1,0 +1,9 @@
+def mediumvioletred():return 0xC71585
+def deeppink():return 0xFF1493
+def hotpink():return 0xFF69B4
+def palevioletred():return 0xDB7093
+def lightpink():return 0xFFB6C1
+def pink():return 0xFFC0CB
+def lightcoral():return 0xF08080
+def indianred():return 0xCD5C5C
+def crimson():return 0xDC143C

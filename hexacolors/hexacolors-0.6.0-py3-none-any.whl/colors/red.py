@@ -1,0 +1,10 @@
+def maroon():return 0x800000
+def darkred():return 0x8B0000
+def firebrick():return 0xB22222
+def brown():return 0xA52A2A
+def salmon():return 0xFA8072
+def darksalmon():return 0xE9967A
+def lightsalmon():return 0xFFA07A
+def coral():return 0xFF7F50
+def tomato():return 0xFF6347
+def red():return 0xFF0000

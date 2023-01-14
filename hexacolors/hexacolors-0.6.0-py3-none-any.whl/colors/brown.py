@@ -1,0 +1,13 @@
+def darkkhaki():return 0xBDB76B
+def goldenrod():return 0xDAA520
+def darkgoldenrod():return 0xB8860B
+def saddlebrown():return 0x8B4513
+def sienna():return 0xA0522D
+def rosybrown():return 0xBC8F8F
+def peru():return 0xCD853F
+def chocolate():return 0xD2691E
+def sandybrown():return 0xF4A460
+def navajowhite():return 0xFFDEAD
+def wheat():return 0xF5DEB3
+def burlywood():return 0xDEB887
+def tan():return 0xD2B48C
