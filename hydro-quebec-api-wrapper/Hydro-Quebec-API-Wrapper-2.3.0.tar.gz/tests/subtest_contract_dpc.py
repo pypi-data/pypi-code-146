@@ -1,0 +1,167 @@
+"""Contract DPC tests module."""
+import datetime
+
+import pytest
+from hydroqc.contract import ContractDPC
+
+from .tools import SkipIfBadRate, today_str, yesterday_str
+
+
+class SubTestContractDPC:
+    """Contract DPC tests class."""
+
+    @SkipIfBadRate(["DPC"], "")
+    @pytest.mark.asyncio
+    async def test_contract_dpc_specific(self, contract: ContractDPC) -> None:
+        """Test total hourly consumption stats."""
+        assert contract.rate == "DPC"
+        assert contract.rate_option == ""
+
+        contract.set_preheat_duration(60)
+
+        assert (
+            isinstance(contract.cp_current_bill, float)
+            and contract.cp_current_bill >= 0
+        )
+        assert (
+            isinstance(contract.cp_projected_bill, float)
+            and contract.cp_projected_bill >= 0
+        )
+        assert (
+            isinstance(contract.cp_daily_bill_mean, float)
+            and contract.cp_daily_bill_mean >= 0
+        )
+        assert (
+            isinstance(contract.cp_projected_total_consumption, int)
+            and contract.cp_projected_total_consumption >= 0
+        )
+        assert (
+            isinstance(contract.cp_kwh_cost_mean, float)
+            and contract.cp_kwh_cost_mean >= 0
+        )
+
+        assert (
+            isinstance(contract.cp_lower_price_consumption, int)
+            and contract.cp_lower_price_consumption >= 0
+        )
+        assert (
+            isinstance(contract.cp_higher_price_consumption, int)
+            and contract.cp_higher_price_consumption >= 0
+        )
+
+        await contract.get_dpc_data()
+
+        contract.set_preheat_duration(10)
+        assert isinstance(contract.peak_handler.winter_start_date, datetime.datetime)
+
+        assert isinstance(contract.peak_handler.winter_end_date, datetime.datetime)
+
+        assert isinstance(contract.last_update_date, str)
+        assert isinstance(
+            datetime.date.fromisoformat(contract.last_update_date), datetime.date
+        )
+
+        assert isinstance(contract.critical_called_hours, int)
+        assert contract.critical_called_hours >= 0
+
+        assert isinstance(contract.max_critical_called_hours, int)
+        assert contract.max_critical_called_hours >= 0
+
+        assert contract.max_critical_called_hours >= contract.critical_called_hours
+
+        assert isinstance(contract.amount_saved_vs_base_rate, float)
+
+        assert isinstance(contract.winter_total_days, int)
+        assert contract.winter_total_days >= 0
+        assert isinstance(contract.winter_total_days_last_update, int)
+        assert contract.winter_total_days_last_update >= 0
+        assert contract.winter_total_days_last_update <= contract.winter_total_days
+
+        assert isinstance(contract.winter_state, str)
+
+        # get_hourly_energy
+        data_csv = await contract.get_hourly_energy(yesterday_str, today_str)
+        first_line = next(data_csv)
+        assert first_line == [
+            "Contrat",
+            "Date et heure",
+            "kWh bas",
+            "kWh Haut",
+            "Code de consommation",
+            "Température moyenne (°C)",
+            "Code de température",
+        ], "Bad get_daily_energy CSV headers"
+
+        # get_daily_energy
+        data_csv = await contract.get_daily_energy(yesterday_str, today_str)
+        first_line = next(data_csv)
+        assert first_line == [
+            "Contrat",
+            "Tarif",
+            "Date",
+            "kWh bas",
+            "kWh Haut",
+            "Code de consommation",
+            "Température moyenne (°C)",
+            "Code de température",
+        ], "Bad get_daily_energy CSV headers"
+
+        # get_consumption_overview_csv
+        data_csv = await contract.get_consumption_overview_csv()
+        first_line = next(data_csv)
+        assert first_line == [
+            "Contract",
+            "Rate",
+            "Starting date",
+            "Ending date",
+            "Day",
+            "Date and time of last reading",
+            "kWh",
+            "Amount ($)",
+            "Meter-reading code",
+            "Average $/day",
+            "Average kWh/day",
+            "kWh anticipated",
+            "Amount anticipated ($)",
+            "Average temperature (°C)",
+        ], "Bad get_consumption_overview_csv CSV headers"
+
+        # Get dpc specific data
+        data = await contract.peak_handler.refresh_data()
+
+        assert data["codeTarif"] == "DPC"
+
+        assert isinstance(contract.peak_handler.raw_data, list)
+        assert contract.peak_handler.winter_start_date.day == 1
+        assert contract.peak_handler.winter_start_date.month == 12
+        assert contract.peak_handler.winter_end_date.day == 31
+        assert contract.peak_handler.winter_end_date.month == 3
+        assert isinstance(contract.peak_handler.peaks, list)
+        assert len(contract.peak_handler.peaks) <= 4
+        assert (
+            contract.peak_handler.current_peak in [None] + contract.peak_handler.peaks
+        )
+        assert (
+            contract.peak_handler.current_state == "peak"
+            if contract.peak_handler.current_peak
+            else "normal"
+        )
+        assert contract.peak_handler.preheat_in_progress in {True, False}
+
+        assert contract.peak_handler.next_peak in [None] + contract.peak_handler.peaks
+        assert (
+            contract.peak_handler.today_morning_peak
+            in [None] + contract.peak_handler.peaks
+        )
+        assert (
+            contract.peak_handler.today_evening_peak
+            in [None] + contract.peak_handler.peaks
+        )
+        assert (
+            contract.peak_handler.tomorrow_morning_peak
+            in [None] + contract.peak_handler.peaks
+        )
+        assert (
+            contract.peak_handler.tomorrow_evening_peak
+            in [None] + contract.peak_handler.peaks
+        )
